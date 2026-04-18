@@ -1,0 +1,11 @@
+[build]
+  command = "npm --prefix netlify/functions ci && npm --prefix checklist-react ci && npm --prefix checklist-react run build"
+  publish = "checklist-react/dist"
+
+[functions]
+  directory = "netlify/functions"
+
+# Chạy local một lệnh: từ gốc repo `npm run dev` (cần netlify-cli). App: http://localhost:8888
+[dev]
+  command = "npm run dev --prefix checklist-react"
+  targetPort = 5173

@@ -1,0 +1,38 @@
+{
+  "indexes": [
+    {
+      "collectionGroup": "checklistResults",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "checkDate", "order": "ASCENDING" },
+        { "fieldPath": "createdAtUtc", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "checklistResults",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "checklistKey", "order": "ASCENDING" },
+        { "fieldPath": "checkDate", "order": "ASCENDING" },
+        { "fieldPath": "createdAtUtc", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "checklistResults",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "checklistKey", "order": "ASCENDING" },
+        { "fieldPath": "createdAtUtc", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "checklistResults",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "checkDate", "order": "ASCENDING" },
+        { "fieldPath": "checklistKey", "order": "ASCENDING" }
+      ]
+    }
+  ],
+  "fieldOverrides": []
+}

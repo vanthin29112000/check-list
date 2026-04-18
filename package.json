@@ -1,0 +1,12 @@
+{
+  "name": "phan-mem-checklist",
+  "private": true,
+  "scripts": {
+    "dev": "netlify dev",
+    "dev:functions": "netlify functions:serve --port 8888",
+    "dev:web": "npm run dev --prefix checklist-react"
+  },
+  "devDependencies": {
+    "netlify-cli": "^22.0.0"
+  }
+}
