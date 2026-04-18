@@ -19,6 +19,7 @@ export function toJsDate(x) {
   if (x instanceof Date) return x
   if (typeof x.toDate === 'function') return x.toDate()
   if (typeof x._seconds === 'number') return new Date(x._seconds * 1000)
+  if (typeof x.seconds === 'number') return new Date(x.seconds * 1000 + (x.nanoseconds || 0) / 1e6)
   const d = new Date(x)
   return Number.isNaN(d.getTime()) ? null : d
 }

@@ -4,6 +4,9 @@
 
 [functions]
   directory = "netlify/functions"
+  # pdfkit + fontkit dùng require/fs nội bộ — esbuild bundle hay làm hỏng runtime trên Netlify → để external
+  node_bundler = "esbuild"
+  external_node_modules = ["pdfkit", "fontkit", "crypto-js", "jpeg-exif", "linebreak", "png-js"]
 
 # Chạy local một lệnh: từ gốc repo `npm run dev` (cần netlify-cli). App: http://localhost:8888
 [dev]

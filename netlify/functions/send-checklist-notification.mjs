@@ -53,6 +53,24 @@ function formatDdMmYyyy(ymd) {
   return `${String(d).padStart(2, '0')}/${String(m).padStart(2, '0')}/${y}`
 }
 
+/** Chuẩn hóa dữ liệu Firestore → object thuần cho PDF (Timestamp / plain seconds). */
+function normalizeDocForPdf(data) {
+  const toDate = (v) => {
+    if (v == null) return v
+    if (v instanceof Date) return v
+    if (typeof v.toDate === 'function') return v.toDate()
+    if (typeof v._seconds === 'number') return new Date(v._seconds * 1000)
+    if (typeof v.seconds === 'number') return new Date(v.seconds * 1000 + (v.nanoseconds || 0) / 1e6)
+    return v
+  }
+  return {
+    ...data,
+    createdAtUtc: toDate(data.createdAtUtc) ?? new Date(),
+    approvedAtUtc: data.approvedAtUtc != null ? toDate(data.approvedAtUtc) : null,
+    details: Array.isArray(data.details) ? data.details : [],
+  }
+}
+
 function buildEmailBody(data, approveUrl) {
   const details = Array.isArray(data.details) ? data.details : []
   const failures = details.filter((x) => !x.passed)
@@ -157,15 +175,21 @@ export const handler = async (event) => {
     /** Chưa verify domain trên Resend: API chỉ cho gửi tới inbox tài khoản. Đặt RESEND_SANDBOX_FORWARD_TO = email đó → mọi thư gửi tới đây, nội dung ghi người nhận thật. */
     const sandboxForward = process.env.RESEND_SANDBOX_FORWARD_TO?.trim()
 
-    /** PDF checklist (cùng layout Firebase Functions cũ); lỗi tạo PDF → vẫn gửi mail text. */
+    /** PDF checklist; lỗi tạo PDF → gửi mail text + ghi chú (không fail cả function). */
     let pdfAttachments = null
+    let pdfErrorNote = ''
     try {
-      const { base64, fileName } = await buildChecklistPdfBase64(data)
+      const pdfInput = normalizeDocForPdf(data)
+      const { base64, fileName } = await buildChecklistPdfBase64(pdfInput)
       pdfAttachments = [{ filename: fileName, content: base64 }]
     } catch (pdfErr) {
+      const msg = pdfErr instanceof Error ? pdfErr.message : String(pdfErr)
       // eslint-disable-next-line no-console
       console.error('buildChecklistPdfBase64', pdfErr)
+      pdfErrorNote = `\n\n(Lưu ý: không tạo được file PDF đính kèm — ${msg}. Vui lòng tải PDF từ màn hình Lịch sử / Xuất PDF.)`
     }
+
+    const textBodyWithPdfNote = textBody + pdfErrorNote
 
     const sendOne = async (intendedTo, subj, txt, attachments = pdfAttachments) => {
       const forward = sandboxForward && sandboxForward.toLowerCase() !== intendedTo.toLowerCase()
@@ -199,7 +223,7 @@ export const handler = async (event) => {
     }
 
     if (toSubmitter) {
-      await sendOne(toSubmitter, subject, textBody)
+      await sendOne(toSubmitter, subject, textBodyWithPdfNote)
     }
 
     for (const mgr of managers) {
@@ -209,8 +233,8 @@ export const handler = async (event) => {
         ? `[CẢNH BÁO] ${data.checklistTitle} — ${totalErrors} lỗi`
         : `[DUYỆT] ${data.checklistTitle} — ${data.submitterName}`
       const bodyWithAlert = alert
-        ? `Cảnh báo: checklist vượt ngưỡng lỗi (${threshold}).\n\n${textBody}`
-        : textBody
+        ? `Cảnh báo: checklist vượt ngưỡng lỗi (${threshold}).\n\n${textBodyWithPdfNote}`
+        : textBodyWithPdfNote
       try {
         await sendOne(mgr, subj, bodyWithAlert)
       } catch (e) {
@@ -219,7 +243,11 @@ export const handler = async (event) => {
       }
     }
 
-    return { statusCode: 200, headers, body: JSON.stringify({ ok: true }) }
+    return {
+      statusCode: 200,
+      headers,
+      body: JSON.stringify({ ok: true, pdfAttached: Boolean(pdfAttachments?.length) }),
+    }
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e)
     // eslint-disable-next-line no-console
