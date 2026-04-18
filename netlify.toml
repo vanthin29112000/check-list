@@ -4,6 +4,8 @@
 
 [functions]
   directory = "netlify/functions"
+  # Đóng gói file .ttf cùng function (đọc qua fs lúc chạy, không qua import — bundler bỏ qua nếu không khai báo)
+  included_files = ["netlify/functions/fonts/**"]
   # pdfkit + fontkit dùng require/fs nội bộ — esbuild bundle hay làm hỏng runtime trên Netlify → để external
   node_bundler = "esbuild"
   external_node_modules = ["pdfkit", "fontkit", "crypto-js", "jpeg-exif", "linebreak", "png-js"]
