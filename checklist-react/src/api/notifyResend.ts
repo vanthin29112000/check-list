@@ -1,0 +1,120 @@
+import { getFirebaseAuth } from '../lib/firebase'
+
+const NOTIFY_PATH = '/.netlify/functions/send-checklist-notification'
+
+/** Cùng origin + Vite proxy tới deploy — tránh CORS "Failed to fetch" khi gọi thẳng URL Netlify từ :5173 */
+function sameOriginNotifyUrl(): string {
+  return `${window.location.origin}${NOTIFY_PATH}`
+}
+
+function notifyUrl(): string | null {
+  if (typeof window === 'undefined') return null
+  const origin = window.location.origin
+  const h = window.location.hostname
+  const isLocal = h === 'localhost' || h === '127.0.0.1'
+  const port = window.location.port
+
+  if (isLocal) {
+    // `netlify dev`: SPA + functions cùng origin (thường :8888)
+    if (port === '8888') {
+      return `${origin}${NOTIFY_PATH}`
+    }
+    // Chỉ Vite :5173 — proxy sang functions local (netlify dev / functions:serve trên :8888)
+    if (import.meta.env.VITE_NETLIFY_DEV_PROXY === '1') {
+      return `${origin}${NOTIFY_PATH}`
+    }
+    const explicit5173 = import.meta.env.VITE_NOTIFY_FUNCTION_URL?.trim()
+    if (explicit5173) {
+      try {
+        if (new URL(explicit5173).origin !== origin) {
+          return sameOriginNotifyUrl()
+        }
+        return explicit5173
+      } catch {
+        return explicit5173
+      }
+    }
+    return null
+  }
+
+  const explicit = import.meta.env.VITE_NOTIFY_FUNCTION_URL?.trim()
+  if (explicit) {
+    try {
+      if (new URL(explicit).origin !== origin) {
+        return sameOriginNotifyUrl()
+      }
+    } catch {
+      return explicit
+    }
+    return explicit
+  }
+  return `${origin}${NOTIFY_PATH}`
+}
+
+const SKIP_NOTIFY_HELP =
+  'Local: (1) `VITE_NOTIFY_FUNCTION_URL` (URL function deploy) — Vite sẽ proxy cùng origin để tránh CORS; (2) `netlify dev` tại gốc repo → http://localhost:8888; (3) `VITE_NETLIFY_DEV_PROXY=1` + gốc repo `npm run dev:functions`. RESEND_* / FIREBASE_SERVICE_ACCOUNT_JSON: `.env` gốc repo (local function) hoặc Netlify (deploy).'
+
+/** Gọi Netlify Function → Resend (cần RESEND_* + FIREBASE_SERVICE_ACCOUNT_JSON trên Netlify). */
+export async function requestChecklistEmailNotification(resultId: string): Promise<void> {
+  const url = notifyUrl()
+  if (!url) {
+    if (import.meta.env.DEV && typeof window !== 'undefined') {
+      const h = window.location.hostname
+      if (h === 'localhost' || h === '127.0.0.1') {
+        // eslint-disable-next-line no-console
+        console.warn('[email]', SKIP_NOTIFY_HELP)
+      }
+    }
+    throw new Error(`Chưa gửi được mail: chưa có URL function. ${SKIP_NOTIFY_HELP}`)
+  }
+
+  const idToken = await getFirebaseAuth().currentUser?.getIdToken()
+  if (!idToken) throw new Error('Chưa đăng nhập Firebase, không gửi được thông báo email.')
+
+  let res: Response
+  try {
+    res = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${idToken}`,
+      },
+      body: JSON.stringify({ resultId }),
+    })
+  } catch (e) {
+    const m = e instanceof Error ? e.message : String(e)
+    const proxyOn = import.meta.env.VITE_NETLIFY_DEV_PROXY === '1'
+    const hint = proxyOn
+      ? ' Nếu VITE_NETLIFY_DEV_PROXY=1: ở gốc repo chạy song song `npm run dev:functions` hoặc `npm run dev` (netlify dev).'
+      : ' Kiểm tra `VITE_NOTIFY_FUNCTION_URL` trong checklist-react/.env và restart Vite (proxy tránh CORS chỉ bật khi URL khác origin).'
+    throw new Error(`Không gọi được function (${m}).${hint}`)
+  }
+
+  const text = await res.text().catch(() => '')
+  if (!res.ok) {
+    const raw = text.trim()
+    let msg = raw
+    if (raw) {
+      try {
+        const j = JSON.parse(raw) as { error?: string }
+        if (typeof j.error === 'string' && j.error.length > 0) msg = j.error
+      } catch {
+        /* giữ body thô (HTML / text từ proxy) */
+      }
+    }
+    if (!msg) {
+      const proxyOn = import.meta.env.VITE_NETLIFY_DEV_PROXY === '1'
+      const onVite =
+        typeof window !== 'undefined' &&
+        (window.location.port === '5173' || window.location.port === '') &&
+        (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1')
+      const hitLocalFnPath = url.includes('/.netlify/functions/')
+      if (proxyOn && onVite && hitLocalFnPath) {
+        msg = `HTTP ${res.status} (thường do proxy tới 127.0.0.1:8888 lỗi — chưa chạy Netlify Functions). Từ gốc repo chạy \`npm run dev:functions\` hoặc tắt VITE_NETLIFY_DEV_PROXY và đặt VITE_NOTIFY_FUNCTION_URL trỏ function đã deploy.`
+      } else {
+        msg = `Gửi email thất bại (HTTP ${res.status}${res.statusText ? ` ${res.statusText}` : ''})`
+      }
+    }
+    throw new Error(msg)
+  }
+}
