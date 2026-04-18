@@ -1,6 +1,7 @@
 import { initializeApp, cert, getApps } from 'firebase-admin/app'
 import { getFirestore } from 'firebase-admin/firestore'
 import { getAuth } from 'firebase-admin/auth'
+import { buildChecklistPdfBase64 } from './buildChecklistPdf.mjs'
 
 function initAdmin() {
   if (getApps().length > 0) return
@@ -156,7 +157,17 @@ export const handler = async (event) => {
     /** Chưa verify domain trên Resend: API chỉ cho gửi tới inbox tài khoản. Đặt RESEND_SANDBOX_FORWARD_TO = email đó → mọi thư gửi tới đây, nội dung ghi người nhận thật. */
     const sandboxForward = process.env.RESEND_SANDBOX_FORWARD_TO?.trim()
 
-    const sendOne = async (intendedTo, subj, txt) => {
+    /** PDF checklist (cùng layout Firebase Functions cũ); lỗi tạo PDF → vẫn gửi mail text. */
+    let pdfAttachments = null
+    try {
+      const { base64, fileName } = await buildChecklistPdfBase64(data)
+      pdfAttachments = [{ filename: fileName, content: base64 }]
+    } catch (pdfErr) {
+      // eslint-disable-next-line no-console
+      console.error('buildChecklistPdfBase64', pdfErr)
+    }
+
+    const sendOne = async (intendedTo, subj, txt, attachments = pdfAttachments) => {
       const forward = sandboxForward && sandboxForward.toLowerCase() !== intendedTo.toLowerCase()
       const to = forward ? sandboxForward : intendedTo
       const subjectOut = forward ? `[Gửi hộ → ${intendedTo}] ${subj}` : subj
@@ -169,13 +180,17 @@ export const handler = async (event) => {
             txt,
           ].join('\n')
         : txt
+      const payload = { from, to: [to], subject: subjectOut, text: textOut }
+      if (attachments?.length) {
+        payload.attachments = attachments
+      }
       const res = await fetch('https://api.resend.com/emails', {
         method: 'POST',
         headers: {
           Authorization: `Bearer ${resendKey}`,
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ from, to: [to], subject: subjectOut, text: textOut }),
+        body: JSON.stringify(payload),
       })
       const raw = await res.text()
       if (!res.ok) {
