@@ -153,14 +153,29 @@ export const handler = async (event) => {
       return { statusCode: 400, headers, body: JSON.stringify({ error: 'Không có địa chỉ email người gửi hoặc quản lý' }) }
     }
 
-    const sendOne = async (to, subj, txt) => {
+    /** Chưa verify domain trên Resend: API chỉ cho gửi tới inbox tài khoản. Đặt RESEND_SANDBOX_FORWARD_TO = email đó → mọi thư gửi tới đây, nội dung ghi người nhận thật. */
+    const sandboxForward = process.env.RESEND_SANDBOX_FORWARD_TO?.trim()
+
+    const sendOne = async (intendedTo, subj, txt) => {
+      const forward = sandboxForward && sandboxForward.toLowerCase() !== intendedTo.toLowerCase()
+      const to = forward ? sandboxForward : intendedTo
+      const subjectOut = forward ? `[Gửi hộ → ${intendedTo}] ${subj}` : subj
+      const textOut = forward
+        ? [
+            '— Chế độ sandbox Resend (chưa có domain): thư chỉ tới inbox được phép.',
+            `Người nhận dự kiến: ${intendedTo}`,
+            '─'.repeat(48),
+            '',
+            txt,
+          ].join('\n')
+        : txt
       const res = await fetch('https://api.resend.com/emails', {
         method: 'POST',
         headers: {
           Authorization: `Bearer ${resendKey}`,
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ from, to: [to], subject: subj, text: txt }),
+        body: JSON.stringify({ from, to: [to], subject: subjectOut, text: textOut }),
       })
       const raw = await res.text()
       if (!res.ok) {
