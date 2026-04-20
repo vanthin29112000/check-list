@@ -1,12 +1,48 @@
+import { existsSync } from 'fs'
 import path from 'path'
 import { fileURLToPath } from 'url'
 import PDFDocument from 'pdfkit'
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url))
-/** Roboto (Apache-2.0) — nhúng TTF để PDF hiển thị đúng tiếng Việt; Helvetica built-in của PDF không hỗ trợ Unicode đầy đủ. */
-const FONT_REG = path.join(__dirname, 'fonts', 'Roboto-Regular.ttf')
-const FONT_BOLD = path.join(__dirname, 'fonts', 'Roboto-Bold.ttf')
-const FONT_ITALIC = path.join(__dirname, 'fonts', 'Roboto-Italic.ttf')
+/**
+ * Netlify esbuild bundle có thể làm `import.meta.url` không hợp lệ → không dùng làm nguồn duy nhất.
+ * Tìm thư mục `fonts/` (Roboto Apache-2.0 trong repo, kèm `included_files` trên Netlify).
+ */
+function resolveFontPath(fileName) {
+  const dirs = []
+  try {
+    const u = import.meta?.url
+    if (typeof u === 'string' && u.length > 0) {
+      dirs.push(path.join(path.dirname(fileURLToPath(u)), 'fonts'))
+    }
+  } catch {
+    /* ignore */
+  }
+  dirs.push(
+    path.join(process.cwd(), 'netlify', 'functions', 'fonts'),
+    path.join(process.cwd(), 'fonts'),
+    path.join('/var/task', 'netlify', 'functions', 'fonts'),
+    path.join('/var/task', 'fonts'),
+  )
+  for (const dir of dirs) {
+    const p = path.join(dir, fileName)
+    if (existsSync(p)) return p
+  }
+  throw new Error(
+    `Không tìm thấy font ${fileName}. Đặt file trong netlify/functions/fonts/ và khai included_files trong netlify.toml.`,
+  )
+}
+
+let _fontReg
+let _fontBold
+let _fontItalic
+function loadFontPaths() {
+  if (!_fontReg) {
+    _fontReg = resolveFontPath('Roboto-Regular.ttf')
+    _fontBold = resolveFontPath('Roboto-Bold.ttf')
+    _fontItalic = resolveFontPath('Roboto-Italic.ttf')
+  }
+  return { FONT_REG: _fontReg, FONT_BOLD: _fontBold, FONT_ITALIC: _fontItalic }
+}
 
 const MANAGER_NAME = 'Nguyễn Hoàng Bảo Trung'
 const TZ = 'Asia/Ho_Chi_Minh'
@@ -60,7 +96,7 @@ function tableLayout(doc) {
   return { tableLeft, tableRight, colXs, colWs }
 }
 
-function headerRowHeight(doc, headers, colWs, fs) {
+function headerRowHeight(doc, headers, colWs, fs, FONT_BOLD) {
   doc.font(FONT_BOLD).fontSize(fs)
   let maxH = 0
   for (let i = 0; i < headers.length; i++) {
@@ -70,7 +106,7 @@ function headerRowHeight(doc, headers, colWs, fs) {
   return maxH
 }
 
-function detailRowHeight(doc, parts, colWs, fs) {
+function detailRowHeight(doc, parts, colWs, fs, FONT_REG, FONT_BOLD) {
   let maxH = 0
   for (let i = 0; i < 4; i++) {
     if (i === 2) doc.font(FONT_BOLD).fontSize(fs)
@@ -81,12 +117,12 @@ function detailRowHeight(doc, parts, colWs, fs) {
   return maxH
 }
 
-function drawTableHeader(doc, layout, y) {
+function drawTableHeader(doc, layout, y, FONT_BOLD) {
   const { colXs, colWs } = layout
   const headers = ['Thiết bị / hệ thống', 'Tiêu chuẩn', 'Kiểm tra', 'Ghi chú']
   const fs = 9
   doc.fillColor('#000000')
-  const h = headerRowHeight(doc, headers, colWs, fs)
+  const h = headerRowHeight(doc, headers, colWs, fs, FONT_BOLD)
   const rowTop = y
   headers.forEach((text, i) => {
     doc.font(FONT_BOLD).fontSize(fs)
@@ -97,14 +133,14 @@ function drawTableHeader(doc, layout, y) {
   return yLine + 8
 }
 
-function drawDetailRow(doc, layout, item, y) {
+function drawDetailRow(doc, layout, item, y, FONT_REG, FONT_BOLD) {
   const { colXs, colWs } = layout
   const passed = Boolean(item.passed)
   const status = passed ? 'Đạt' : 'Không đạt'
   const note = item.note ? String(item.note) : ''
   const fs = 8
   const parts = [String(item.label ?? ''), String(item.standard ?? ''), status, note]
-  const maxH = detailRowHeight(doc, parts, colWs, fs)
+  const maxH = detailRowHeight(doc, parts, colWs, fs, FONT_REG, FONT_BOLD)
   const rowTop = y
   doc.font(FONT_REG).fontSize(fs).fillColor('#000000')
   doc.text(parts[0], colXs[0], rowTop, { width: colWs[0], lineGap: 1 })
@@ -146,6 +182,16 @@ export function buildChecklistPdfBase64(raw) {
   const fileName = `checklist-${result.checklistKey}-${String(result.checkDate).replace(/-/g, '')}.pdf`
 
   return new Promise((resolve, reject) => {
+    let FONT_REG
+    let FONT_BOLD
+    let FONT_ITALIC
+    try {
+      ;({ FONT_REG, FONT_BOLD, FONT_ITALIC } = loadFontPaths())
+    } catch (e) {
+      reject(e)
+      return
+    }
+
     const chunks = []
     const doc = new PDFDocument({ size: 'A4', margin: 36 })
     doc.on('data', (c) => chunks.push(c))
@@ -192,23 +238,23 @@ export function buildChecklistPdfBase64(raw) {
       doc.font(FONT_BOLD).fontSize(11).fillColor('#000000').text(g)
       doc.font(FONT_REG).moveDown(0.15)
       let y = doc.y
-      y = drawTableHeader(doc, layout, y)
+      y = drawTableHeader(doc, layout, y, FONT_BOLD)
 
       for (const item of items) {
         const passed = Boolean(item.passed)
         const status = passed ? 'Đạt' : 'Không đạt'
         const note = item.note ? String(item.note) : ''
         const parts = [String(item.label ?? ''), String(item.standard ?? ''), status, note]
-        const estH = detailRowHeight(doc, parts, layout.colWs, 8) + 10
+        const estH = detailRowHeight(doc, parts, layout.colWs, 8, FONT_REG, FONT_BOLD) + 10
         if (y + estH > pageBottom) {
           doc.addPage()
           y = doc.page.margins.top
           doc.font(FONT_BOLD).fontSize(10).text(`${g} (tiếp)`, layout.tableLeft, y)
           doc.moveDown(0.2)
           y = doc.y
-          y = drawTableHeader(doc, layout, y)
+          y = drawTableHeader(doc, layout, y, FONT_BOLD)
         }
-        y = drawDetailRow(doc, layout, item, y)
+        y = drawDetailRow(doc, layout, item, y, FONT_REG, FONT_BOLD)
       }
       doc.y = y
       doc.moveDown(0.35)
