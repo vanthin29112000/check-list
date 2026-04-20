@@ -234,14 +234,16 @@ export function buildChecklistPdfBase64(raw) {
     doc.moveDown(0.5)
     doc.moveTo(m.left, doc.y).lineTo(doc.page.width - m.right, doc.y).stroke()
     doc.moveDown(0.5)
-    doc.font(FONT_BOLD).fontSize(13).text(String(result.checklistTitle).toUpperCase(), { align: 'center' })
+    const contentW = doc.page.width - m.left - m.right
+    doc.x = m.left
+    doc.font(FONT_BOLD).fontSize(13).text(String(result.checklistTitle).toUpperCase(), m.left, doc.y, { width: contentW, align: 'center' })
     doc.font(FONT_REG).fontSize(10)
     doc.moveDown(0.4)
-    doc.text(`Người check: ${result.submitterName}`, { align: 'center' })
-    doc.text(`(${result.submitterEmail})`, { align: 'center' })
-    doc.text(`Ngày kiểm tra: ${formatNgayKiemTraDisplay(result.checkDate)}`, { align: 'center' })
-    doc.text(`Ngày gửi: ${formatDateTime(result.createdAtUtc)} (GMT+7)`, { align: 'center' })
-    doc.font(FONT_BOLD).text(`Tổng lỗi: ${result.totalErrors}`, { align: 'center' })
+    doc.text(`Người check: ${result.submitterName}`, m.left, doc.y, { width: contentW, align: 'center' })
+    doc.text(`(${result.submitterEmail})`, m.left, doc.y, { width: contentW, align: 'center' })
+    doc.text(`Ngày kiểm tra: ${formatNgayKiemTraDisplay(result.checkDate)}`, m.left, doc.y, { width: contentW, align: 'center' })
+    doc.text(`Ngày gửi: ${formatDateTime(result.createdAtUtc)} (GMT+7)`, m.left, doc.y, { width: contentW, align: 'center' })
+    doc.font(FONT_BOLD).text(`Tổng lỗi: ${result.totalErrors}`, m.left, doc.y, { width: contentW, align: 'center' })
     doc.font(FONT_REG).moveDown(0.6)
 
     const layout = tableLayout(doc)
