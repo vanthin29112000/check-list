@@ -202,23 +202,36 @@ export function buildChecklistPdfBase64(raw) {
     })
 
     doc.fontSize(10)
-    doc.font(FONT_REG).text('TRUNG TÂM QUẢN LÝ KÝ TÚC XÁ', { align: 'center' }).moveDown(0.2)
-    doc.font(FONT_BOLD).text('PHÒNG CTSV-CĐS', { align: 'center' }).font(FONT_REG)
-    doc.moveDown(0.3)
-    doc.text('Số: /CL-CNTTDL', { align: 'center' })
-    doc.moveDown(0.8)
-    doc.font(FONT_BOLD).text('CỘNG HÒA XÃ HỘI CHỦ NGHĨA VIỆT NAM', { align: 'center' })
-    doc.font(FONT_REG).text('Độc lập - Tự do - Hạnh phúc', { align: 'center' })
+    const m = doc.page.margins
+    const innerW = doc.page.width - m.left - m.right
+    const gap = 28
+    const colW = (innerW - gap) / 2
+    const xL = m.left
+    const xR = m.left + colW + gap
+    const y0 = doc.y
+
     const created = toDisplayInTz(result.createdAtUtc)
-    doc.moveDown(0.3)
-    doc
-      .font(FONT_ITALIC)
-      .text(
-        `Thành phố Hồ Chí Minh, ngày ${String(created.getDate()).padStart(2, '0')} tháng ${String(created.getMonth() + 1).padStart(2, '0')} năm ${created.getFullYear()}`,
-        { align: 'center' },
-      )
-      .font(FONT_REG)
-    doc.moveDown(1)
+    const dateLine = `Thành phố Hồ Chí Minh, ngày ${String(created.getDate()).padStart(2, '0')} tháng ${String(created.getMonth() + 1).padStart(2, '0')} năm ${created.getFullYear()}`
+
+    let yL = y0
+    doc.font(FONT_REG).text('TRUNG TÂM QUẢN LÝ KÝ TÚC XÁ', xL, yL, { width: colW, align: 'left', lineGap: 2 })
+    yL = doc.y
+    doc.font(FONT_BOLD).text('PHÒNG CTSV-CĐS', xL, yL, { width: colW, align: 'left', lineGap: 2 })
+    yL = doc.y
+    doc.font(FONT_REG).text('Số: /CL-CNTTDL', xL, yL, { width: colW, align: 'left', lineGap: 2 })
+    yL = doc.y
+
+    let yR = y0
+    doc.font(FONT_BOLD).text('CỘNG HÒA XÃ HỘI CHỦ NGHĨA VIỆT NAM', xR, yR, { width: colW, align: 'right', lineGap: 2 })
+    yR = doc.y
+    doc.font(FONT_REG).text('Độc lập - Tự do - Hạnh phúc', xR, yR, { width: colW, align: 'right', lineGap: 2 })
+    yR = doc.y
+    doc.font(FONT_ITALIC).text(dateLine, xR, yR, { width: colW, align: 'right', lineGap: 2 })
+    yR = doc.y
+
+    doc.y = Math.max(yL, yR) + 10
+    doc.font(FONT_REG)
+    doc.moveDown(0.5)
     doc.moveTo(36, doc.y).lineTo(doc.page.width - 36, doc.y).stroke()
     doc.moveDown(0.5)
     doc.font(FONT_BOLD).fontSize(13).text(String(result.checklistTitle).toUpperCase(), { align: 'center' })
