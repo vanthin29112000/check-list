@@ -82,7 +82,24 @@ export default function HistoryPage() {
       key: 'pdf',
       width: 110,
       render: (_, r) => (
-        <Button size="small" onClick={() => downloadChecklistPdf(r)}>
+        <Button
+          size="small"
+          onClick={() => {
+            void (async () => {
+              try {
+                await downloadChecklistPdf(r)
+                notiApi.success({ message: 'Đã tải PDF', placement: 'topRight' })
+              } catch (e) {
+                const m = e instanceof Error ? e.message : String(e)
+                notiApi.error({
+                  message: 'Xuất PDF thất bại',
+                  description: m,
+                  placement: 'topRight',
+                })
+              }
+            })()
+          }}
+        >
           Xuất PDF
         </Button>
       ),

@@ -52,9 +52,10 @@ function notifyUrl(): string | null {
 const SKIP_NOTIFY_HELP =
   'Local: (1) `netlify dev` → http://localhost:8888; (2) `VITE_NETLIFY_DEV_PROXY=1` + chạy functions; (3) `VITE_NOTIFY_FUNCTION_URL`. Trên Netlify/.env gốc: SMTP_* hoặc RESEND_API_KEY + RESEND_FROM. Tuỳ chọn: NOTIFY_SHARED_SECRET (= VITE_NOTIFY_SHARED_SECRET).'
 
-/** Gọi Netlify Function gửi mail (SMTP). Server không dùng Firebase — payload do app gửi kèm. */
+/** Gọi Netlify Function gửi mail (SMTP/Resend). `recipientEmails` từ tab Cấu hình; nếu không gửi thì server dùng LEADER_EMAILS/HR_EMAILS/MANAGER_EMAILS trên Netlify. */
 export async function requestChecklistEmailNotification(
   notification: ChecklistEmailNotificationPayload,
+  options?: { recipientEmails?: string[] },
 ): Promise<void> {
   const url = notifyUrl()
   if (!url) {
@@ -76,10 +77,14 @@ export async function requestChecklistEmailNotification(
 
   let res: Response
   try {
+    const body: Record<string, unknown> = { notification }
+    if (options?.recipientEmails?.length) {
+      body.recipientEmails = options.recipientEmails
+    }
     res = await fetch(url, {
       method: 'POST',
       headers,
-      body: JSON.stringify({ notification }),
+      body: JSON.stringify(body),
     })
   } catch (e) {
     const m = e instanceof Error ? e.message : String(e)

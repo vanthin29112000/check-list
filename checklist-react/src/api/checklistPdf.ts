@@ -1,13 +1,43 @@
 import { jsPDF } from 'jspdf'
 import type { HistoryRow } from './types'
 
-export function downloadChecklistPdf(row: HistoryRow): void {
+function arrayBufferToBase64(buffer: ArrayBuffer): string {
+  const bytes = new Uint8Array(buffer)
+  let binary = ''
+  for (let i = 0; i < bytes.byteLength; i++) {
+    binary += String.fromCharCode(bytes[i]!)
+  }
+  return btoa(binary)
+}
+
+async function fetchFontBase64(relativePath: string): Promise<string> {
+  const res = await fetch(relativePath)
+  if (!res.ok) {
+    throw new Error(`Không tải được font (${relativePath}): HTTP ${res.status}`)
+  }
+  return arrayBufferToBase64(await res.arrayBuffer())
+}
+
+/** Helvetica mặc định của jsPDF không hỗ trợ Unicode → tiếng Việt bị lỗi; nhúng Noto Sans từ public/fonts. */
+async function embedVietnameseFonts(doc: jsPDF): Promise<void> {
+  const root = import.meta.env.BASE_URL || '/'
+  const reg = await fetchFontBase64(`${root}fonts/NotoSans-Regular.ttf`)
+  const bold = await fetchFontBase64(`${root}fonts/NotoSans-Bold.ttf`)
+  doc.addFileToVFS('NotoSans-Regular.ttf', reg)
+  doc.addFileToVFS('NotoSans-Bold.ttf', bold)
+  doc.addFont('NotoSans-Regular.ttf', 'NotoSans', 'normal', undefined, 'Identity-H')
+  doc.addFont('NotoSans-Bold.ttf', 'NotoSans', 'bold', undefined, 'Identity-H')
+}
+
+export async function downloadChecklistPdf(row: HistoryRow): Promise<void> {
   const doc = new jsPDF({ unit: 'pt', format: 'a4' })
+  await embedVietnameseFonts(doc)
+
   const margin = 40
   let y = margin
   const line = (text: string, size = 10, bold = false) => {
     doc.setFontSize(size)
-    doc.setFont('helvetica', bold ? 'bold' : 'normal')
+    doc.setFont('NotoSans', bold ? 'bold' : 'normal')
     const lines = doc.splitTextToSize(text, doc.internal.pageSize.getWidth() - margin * 2)
     for (const ln of lines) {
       if (y > doc.internal.pageSize.getHeight() - margin) {

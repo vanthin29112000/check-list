@@ -6,6 +6,7 @@ import {
   CheckCircleOutlined,
   ClockCircleOutlined,
   FileSearchOutlined,
+  MailOutlined,
   UserSwitchOutlined,
 } from '@ant-design/icons'
 import { Badge, Button, Layout, Menu, Segmented, Space, Tooltip, Typography } from 'antd'
@@ -18,6 +19,7 @@ import ChecklistFormPage from './pages/ChecklistFormPage'
 import DashboardPage from './pages/DashboardPage'
 import HistoryPage from './pages/HistoryPage'
 import ChecklistSchedulePage from './pages/ChecklistSchedulePage'
+import EmailConfigPage from './pages/EmailConfigPage'
 
 type UserRole = 'staff' | 'manager'
 const { Sider, Header, Content } = Layout
@@ -31,13 +33,15 @@ export default function App() {
 
   const key = loc.pathname.startsWith('/approve')
     ? 'approve'
-    : loc.pathname.startsWith('/history')
-      ? 'history'
-      : loc.pathname.startsWith('/schedule')
-        ? 'schedule'
-        : loc.pathname.startsWith('/dashboard')
-          ? 'dashboard'
-          : 'checklist'
+    : loc.pathname.startsWith('/email-config')
+      ? 'email-config'
+      : loc.pathname.startsWith('/history')
+        ? 'history'
+        : loc.pathname.startsWith('/schedule')
+          ? 'schedule'
+          : loc.pathname.startsWith('/dashboard')
+            ? 'dashboard'
+            : 'checklist'
 
   useEffect(() => {
     localStorage.setItem('app-role', role)
@@ -74,6 +78,12 @@ export default function App() {
     redirectedRef.current = true
     void navigate('/', { replace: true })
   }, [role, status.missingToday, loc.pathname, navigate])
+
+  useEffect(() => {
+    if (role !== 'staff') return
+    if (!loc.pathname.startsWith('/email-config')) return
+    void navigate('/', { replace: true })
+  }, [role, loc.pathname, navigate])
 
   const menuItems = useMemo<MenuProps['items']>(() => {
     const actionLabel = (
@@ -171,6 +181,11 @@ export default function App() {
               </Space>
             ),
           },
+          {
+            key: 'email-config',
+            icon: <MailOutlined />,
+            label: <Link to="/email-config">Cấu hình email</Link>,
+          },
         ],
       },
     ]
@@ -232,6 +247,7 @@ export default function App() {
             <Route path="/schedule" element={<ChecklistSchedulePage />} />
             <Route path="/dashboard" element={<DashboardPage />} />
             <Route path="/history" element={<HistoryPage />} />
+            <Route path="/email-config" element={<EmailConfigPage />} />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
         </Content>

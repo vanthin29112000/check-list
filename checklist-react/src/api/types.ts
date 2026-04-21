@@ -55,6 +55,18 @@ export interface HistoryDetail {
   note?: string | null
 }
 
+/** Một dòng trong tab Cấu hình email (lãnh đạo / nhân sự). */
+export interface EmailRecipientRow {
+  displayName: string
+  email: string
+}
+
+/** Lưu tại Firestore appSettings/emailRecipients. */
+export interface EmailRecipientsDocument {
+  leaders: EmailRecipientRow[]
+  hrStaff: EmailRecipientRow[]
+}
+
 /** Gửi lên Netlify function send-checklist-notification (chỉ SMTP; server không đọc Firestore). */
 export interface ChecklistEmailNotificationPayload {
   checklistKey: string

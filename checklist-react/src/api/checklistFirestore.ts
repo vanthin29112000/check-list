@@ -8,6 +8,7 @@ import {
   query,
   runTransaction,
   serverTimestamp,
+  setDoc,
   updateDoc,
   where,
 } from 'firebase/firestore'
@@ -21,6 +22,8 @@ import type {
   DailyStatusResponse,
   DashboardResponse,
   DefinitionsResponse,
+  EmailRecipientRow,
+  EmailRecipientsDocument,
   HistoryDetail,
   HistoryResponse,
   HistoryRow,
@@ -32,6 +35,75 @@ const RESULTS = 'checklistResults'
 const UNIQ = 'checklistUniqueness'
 const COUNTERS = 'checklistCounters'
 const COUNTER_CL_DOC_ID = 'clCnttDl'
+const APP_SETTINGS = 'appSettings'
+const EMAIL_RECIPIENTS_DOC = 'emailRecipients'
+
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
+
+function defaultEmailRecipientsDoc(): EmailRecipientsDocument {
+  return { leaders: [], hrStaff: [] }
+}
+
+function parseEmailRows(rows: unknown): EmailRecipientRow[] {
+  if (!Array.isArray(rows)) return []
+  const out: EmailRecipientRow[] = []
+  for (const r of rows) {
+    if (!r || typeof r !== 'object') continue
+    const o = r as Record<string, unknown>
+    out.push({
+      displayName: String(o.displayName ?? '').trim(),
+      email: String(o.email ?? '').trim(),
+    })
+  }
+  return out
+}
+
+export async function fetchEmailRecipientsConfig(): Promise<EmailRecipientsDocument> {
+  await ensureFirebaseAnonymousUser()
+  const db = getDb()
+  const snap = await getDoc(doc(db, APP_SETTINGS, EMAIL_RECIPIENTS_DOC))
+  if (!snap.exists()) return defaultEmailRecipientsDoc()
+  const d = snap.data() as Record<string, unknown>
+  return {
+    leaders: parseEmailRows(d.leaders),
+    hrStaff: parseEmailRows(d.hrStaff),
+  }
+}
+
+export async function saveEmailRecipientsConfig(cfg: EmailRecipientsDocument): Promise<void> {
+  await ensureFirebaseAnonymousUser()
+  const leaders = cfg.leaders
+    .map((x) => ({ displayName: x.displayName.trim(), email: x.email.trim() }))
+    .filter((x) => x.email.length > 0)
+  const hrStaff = cfg.hrStaff
+    .map((x) => ({ displayName: x.displayName.trim(), email: x.email.trim() }))
+    .filter((x) => x.email.length > 0)
+  for (const x of [...leaders, ...hrStaff]) {
+    if (!EMAIL_RE.test(x.email)) {
+      throw new Error(`Email không hợp lệ: ${x.email}`)
+    }
+  }
+  const db = getDb()
+  await setDoc(doc(db, APP_SETTINGS, EMAIL_RECIPIENTS_DOC), {
+    leaders,
+    hrStaff,
+    updatedAtUtc: serverTimestamp(),
+  })
+}
+
+export function recipientEmailsFromConfig(cfg: EmailRecipientsDocument): string[] {
+  const seen = new Set<string>()
+  const out: string[] = []
+  for (const x of [...cfg.leaders, ...cfg.hrStaff]) {
+    const e = x.email?.trim()
+    if (!e) continue
+    const k = e.toLowerCase()
+    if (seen.has(k)) continue
+    seen.add(k)
+    out.push(e)
+  }
+  return out
+}
 
 export function getPublicBaseUrl(): string {
   const v = (import.meta.env.VITE_PUBLIC_BASE_URL as string | undefined)?.trim()
@@ -307,7 +379,11 @@ export async function submitChecklist(
     clDocSerial,
   }
   try {
-    await requestChecklistEmailNotification(emailPayload)
+    const cfg = await fetchEmailRecipientsConfig()
+    const recipientEmails = recipientEmailsFromConfig(cfg)
+    await requestChecklistEmailNotification(emailPayload, {
+      recipientEmails: recipientEmails.length > 0 ? recipientEmails : undefined,
+    })
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e)
     throw new Error(
@@ -626,7 +702,11 @@ export async function resendChecklistEmail(resultId: string): Promise<{ message:
   }
   const r = mapDoc(snap.id, snap.data() as Record<string, unknown>)
   try {
-    await requestChecklistEmailNotification(resultDocToEmailPayload(r))
+    const cfg = await fetchEmailRecipientsConfig()
+    const recipientEmails = recipientEmailsFromConfig(cfg)
+    await requestChecklistEmailNotification(resultDocToEmailPayload(r), {
+      recipientEmails: recipientEmails.length > 0 ? recipientEmails : undefined,
+    })
     return { message: 'Đã gửi lại email (Resend).' }
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e)

@@ -46,6 +46,25 @@ function collectNotificationRecipients() {
   return out
 }
 
+/** Danh sách email do app gửi kèm (tab Cấu hình email); nếu rỗng thì dùng biến môi trường. */
+function parseRecipientEmailsFromBody(body) {
+  if (!body || typeof body !== 'object') return []
+  const raw = /** @type {Record<string, unknown>} */ (body).recipientEmails
+  if (!Array.isArray(raw)) return []
+  const seen = new Set()
+  const out = []
+  for (const x of raw) {
+    if (typeof x !== 'string') continue
+    const e = x.trim()
+    if (!e || !e.includes('@')) continue
+    const k = e.toLowerCase()
+    if (seen.has(k)) continue
+    seen.add(k)
+    out.push(e)
+  }
+  return out
+}
+
 function formatDdMmYyyy(ymd) {
   const [y, m, d] = ymd.split('-').map(Number)
   if (!y) return ymd
@@ -320,7 +339,8 @@ export const handler = async (event) => {
     const subjectSubmitter = `[Checklist] Kết quả — ${data.checklistTitle} — ${data.submitterName}`
 
     const toSubmitter = String(data.submitterEmail || '').trim()
-    const managers = collectNotificationRecipients()
+    const fromClient = parseRecipientEmailsFromBody(body)
+    const managers = fromClient.length > 0 ? fromClient : collectNotificationRecipients()
     const threshold = Number(process.env.ERROR_THRESHOLD ?? '5')
     const totalErrors = Number(data.totalErrors ?? 0)
     const submitterLower = toSubmitter.toLowerCase()
