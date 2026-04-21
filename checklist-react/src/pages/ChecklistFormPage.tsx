@@ -760,10 +760,11 @@ export default function ChecklistFormPage() {
           ) : (
             <Collapse
               size="small"
-              defaultActiveKey={[]}
+              activeKey={['items']}
               items={[
                 {
                   key: 'items',
+                  collapsible: 'disabled',
                   label: (() => {
                     const s = getSectionStats(block.data)
                     const lab = block.groupTitle.trim() || 'Kiểm tra'
