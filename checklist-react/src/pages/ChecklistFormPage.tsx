@@ -21,7 +21,7 @@ import {
 import type { ColumnsType } from 'antd/es/table'
 import dayjs, { Dayjs } from 'dayjs'
 import { useNavigate } from 'react-router-dom'
-import { fetchCompletionStatus, fetchDefinitions, submitChecklist } from '../api/client'
+import { fetchCompletionStatus, fetchDefinitions, fetchEmailRecipientsConfig, submitChecklist } from '../api/client'
 import type { ChecklistDefinition, ChecklistItemDef } from '../api/types'
 
 type RowData = ChecklistItemDef & { groupTitle: string }
@@ -49,6 +49,7 @@ export default function ChecklistFormPage() {
   const [completedTodayByKey, setCompletedTodayByKey] = useState<Record<string, number>>({})
   const [submitterName, setSubmitterName] = useState('')
   const [submitterEmail, setSubmitterEmail] = useState('')
+  const [configuredEmailByName, setConfiguredEmailByName] = useState<Record<string, string>>({})
   const [checkDate] = useState<Dayjs>(dayjs())
 
   const [passedByKey, setPassedByKey] = useState<Record<string, boolean | undefined>>({})
@@ -103,6 +104,29 @@ export default function ChecklistFormPage() {
   }, [notiApi, checkDate])
 
   useEffect(() => {
+    let cancelled = false
+    void (async () => {
+      try {
+        const cfg = await fetchEmailRecipientsConfig()
+        if (cancelled) return
+        const map: Record<string, string> = {}
+        for (const row of cfg.hrStaff) {
+          const name = normalizePersonName(row.displayName)
+          const email = String(row.email ?? '').trim()
+          if (!name || !email) continue
+          map[name] = email
+        }
+        setConfiguredEmailByName(map)
+      } catch {
+        /* không chặn thao tác form nếu chưa tải được cấu hình email */
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  useEffect(() => {
     if (!checklistKey) return
     if ((completedTodayByKey[checklistKey] ?? 0) === 0) return
     setChecklistKey(undefined)
@@ -145,8 +169,9 @@ export default function ChecklistFormPage() {
     }
     const assignee = resolveAssignee(checklistKey, checkDate)
     setSubmitterName(assignee.name)
-    setSubmitterEmail(assignee.email)
-  }, [checklistKey, checkDate])
+    const mapped = configuredEmailByName[normalizePersonName(assignee.name)]
+    setSubmitterEmail(mapped || assignee.email)
+  }, [checklistKey, checkDate, configuredEmailByName])
 
   // Khôi phục bản nháp khi user vào checklist/date tương ứng.
   useEffect(() => {
@@ -952,6 +977,13 @@ function pickSectionIcon(title: string) {
   if (lower.includes('mạng') || lower.includes('network')) return '🌐'
   if (lower.includes('điện') || lower.includes('ups')) return '🔌'
   return '🧩'
+}
+
+function normalizePersonName(s: string): string {
+  return String(s ?? '')
+    .trim()
+    .replace(/\s+/g, ' ')
+    .toLowerCase()
 }
 
 function resolveAssignee(checklistKey: string, checkDate: Dayjs): { name: string; email: string } {
