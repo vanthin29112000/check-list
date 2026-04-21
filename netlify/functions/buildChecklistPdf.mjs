@@ -84,6 +84,19 @@ function formatDateTime(utc) {
   return `${String(t.getDate()).padStart(2, '0')}/${String(t.getMonth() + 1).padStart(2, '0')}/${t.getFullYear()} ${String(t.getHours()).padStart(2, '0')}:${String(t.getMinutes()).padStart(2, '0')}`
 }
 
+function parseLeadingNumber(text) {
+  const m = String(text ?? '').trim().match(/^(\d+)\./)
+  if (!m) return Number.POSITIVE_INFINITY
+  return Number(m[1])
+}
+
+function compareGroupTitle(a, b) {
+  const na = parseLeadingNumber(a)
+  const nb = parseLeadingNumber(b)
+  if (na !== nb) return na - nb
+  return String(a).localeCompare(String(b), 'vi')
+}
+
 /** Chiều ngang bảng chi tiết (4 cột như mẫu xuất cũ). */
 function tableLayout(doc) {
   const tableLeft = doc.page.margins.left
@@ -177,7 +190,7 @@ export function buildChecklistPdfBase64(raw) {
     list.push(d)
     byGroup.set(g, list)
   }
-  const groupKeys = [...byGroup.keys()].sort((a, b) => a.localeCompare(b))
+  const groupKeys = [...byGroup.keys()].sort(compareGroupTitle)
 
   const fileName = `checklist-${result.checklistKey}-${String(result.checkDate).replace(/-/g, '')}.pdf`
 
