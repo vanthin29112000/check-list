@@ -93,10 +93,9 @@ export default function EmailConfigPage() {
     <Card loading={loading} title="Cấu hình email thông báo checklist">
       <Typography.Paragraph>
         Danh sách lưu trên Firestore (<code>appSettings/emailRecipients</code>). <strong>Lãnh đạo</strong> nhận mail có
-        link duyệt; <strong>Nhân sự</strong> gồm các anh/chị thực hiện checklist — cũng nhận cùng nội dung thông báo
-        (điền đủ email rồi bấm Lưu). Lần đầu mở trang, hệ thống gợi ý sẵn họ tên; nếu chưa lưu hoặc không có email hợp
-        lệ, server có thể dùng biến <code>LEADER_EMAILS</code> / <code>HR_EMAILS</code> / <code>MANAGER_EMAILS</code>{' '}
-        trên Netlify.
+        link duyệt và dashboard. <strong>Nhân sự</strong>: khi ai đó nộp checklist, nếu ô Họ tên trên form trùng (không
+        phân biệt hoa thường) với một dòng ở đây, email tương ứng nhận bản <em>thông báo</em> (tóm tắt + link dashboard),
+        <em>không</em> có link duyệt. Điền email rồi bấm Lưu. Lần đầu mở trang, hệ thống gợi ý sẵn họ tên.
       </Typography.Paragraph>
       <Tabs
         items={[
@@ -118,7 +117,7 @@ export default function EmailConfigPage() {
               <RecipientEditor
                 rows={hrStaff}
                 setRows={setHrStaff}
-                hint="Người thực hiện checklist (Chề Long Bào, Đặng Phi Hùng, …) — điền email để nhận bản thông báo."
+                hint="Họ tên phải khớp ô Họ tên lúc nộp checklist — nhận mail thông báo (không link duyệt)."
               />
             ),
           },

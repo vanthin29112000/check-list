@@ -105,30 +105,43 @@ function normalizePersonName(s: string): string {
   return s.trim().replace(/\s+/g, ' ').toLowerCase()
 }
 
+export interface SplitRecipientEmails {
+  /** Tab Lãnh đạo — mail có link duyệt + dashboard. */
+  leaderEmails: string[]
+  /** Tối đa một dòng tab Nhân sự trùng tên người nộp — mail thông báo, không có link duyệt. */
+  staffNotifyEmails: string[]
+}
+
 /**
- * Danh sách nhận mail dạng lãnh đạo (có link duyệt): tất cả email trong tab Lãnh đạo +
- * đúng một dòng tab Nhân sự có họ tên trùng người nộp checklist (ô "Họ tên" trên form).
+ * Tách email lãnh đạo (duyệt) và nhân sự (chỉ thông báo).
+ * Link duyệt chỉ gửi tới `leaderEmails`; nhân sự khớp tên nhận bản tóm tắt + dashboard (xử lý ở function).
  */
-export function recipientEmailsForSubmit(cfg: EmailRecipientsDocument, submitterName: string): string[] {
-  const seen = new Set<string>()
-  const out: string[] = []
-  const add = (e: string | undefined) => {
+export function splitRecipientEmailsForSubmit(
+  cfg: EmailRecipientsDocument,
+  submitterName: string,
+): SplitRecipientEmails {
+  const seenLeaders = new Set<string>()
+  const leaderEmails: string[] = []
+  const addLeader = (e: string | undefined) => {
     const x = (e ?? '').trim()
     if (!x) return
     const k = x.toLowerCase()
-    if (seen.has(k)) return
-    seen.add(k)
-    out.push(x)
+    if (seenLeaders.has(k)) return
+    seenLeaders.add(k)
+    leaderEmails.push(x)
   }
-  for (const x of cfg.leaders) add(x.email)
+  for (const x of cfg.leaders) addLeader(x.email)
+
+  const staffNotifyEmails: string[] = []
   const sn = normalizePersonName(submitterName)
   for (const x of cfg.hrStaff) {
     if (normalizePersonName(x.displayName) === sn) {
-      add(x.email)
+      const em = (x.email ?? '').trim()
+      if (em) staffNotifyEmails.push(em)
       break
     }
   }
-  return out
+  return { leaderEmails, staffNotifyEmails }
 }
 
 export function getPublicBaseUrl(): string {
@@ -406,13 +419,13 @@ export async function submitChecklist(
   }
   try {
     const cfg = await fetchEmailRecipientsConfig()
-    const recipientEmails = recipientEmailsForSubmit(cfg, body.submitterName.trim())
-    if (recipientEmails.length === 0) {
+    const { leaderEmails, staffNotifyEmails } = splitRecipientEmailsForSubmit(cfg, body.submitterName.trim())
+    if (leaderEmails.length === 0) {
       throw new Error(
-        'Chưa có người nhận mail: vào Manager → Cấu hình email — điền ít nhất một email lãnh đạo; tên trong tab Nhân sự phải trùng (không phân biệt hoa thường) với ô Họ tên khi nộp để thêm email nhân sự đang checklist.',
+        'Chưa có người nhận mail duyệt: vào Manager → Cấu hình email — điền ít nhất một email trong tab Lãnh đạo. Tab Nhân sự (trùng tên người nộp) chỉ nhận thông báo, không có link duyệt.',
       )
     }
-    await requestChecklistEmailNotification(emailPayload, { recipientEmails })
+    await requestChecklistEmailNotification(emailPayload, { recipientEmails: leaderEmails, staffNotifyEmails })
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e)
     throw new Error(
@@ -732,15 +745,18 @@ export async function resendChecklistEmail(resultId: string): Promise<{ message:
   const r = mapDoc(snap.id, snap.data() as Record<string, unknown>)
   try {
     const cfg = await fetchEmailRecipientsConfig()
-    const recipientEmails = recipientEmailsForSubmit(cfg, r.submitterName)
-    if (recipientEmails.length === 0) {
+    const { leaderEmails, staffNotifyEmails } = splitRecipientEmailsForSubmit(cfg, r.submitterName)
+    if (leaderEmails.length === 0) {
       return {
         message:
-          'Chưa có người nhận: kiểm tra Cấu hình email (lãnh đạo + tên người gửi trùng tab Nhân sự).',
+          'Chưa có người nhận duyệt: kiểm tra tab Lãnh đạo trong Cấu hình email (cần ít nhất một email).',
         skipped: true,
       }
     }
-    await requestChecklistEmailNotification(resultDocToEmailPayload(r), { recipientEmails })
+    await requestChecklistEmailNotification(resultDocToEmailPayload(r), {
+      recipientEmails: leaderEmails,
+      staffNotifyEmails,
+    })
     return { message: 'Đã gửi lại email (Resend).' }
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e)

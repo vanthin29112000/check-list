@@ -21,10 +21,10 @@ function corsHeaders(requestOrigin) {
   }
 }
 
-/** Danh sách email do app gửi kèm (tab Cấu hình — bắt buộc). */
-function parseRecipientEmailsFromBody(body) {
+/** Danh sách email chuẩn hoá từ mảng JSON (tab Cấu hình). */
+function parseEmailListFromBody(body, key) {
   if (!body || typeof body !== 'object') return []
-  const raw = /** @type {Record<string, unknown>} */ (body).recipientEmails
+  const raw = /** @type {Record<string, unknown>} */ (body)[key]
   if (!Array.isArray(raw)) return []
   const seen = new Set()
   const out = []
@@ -38,6 +38,16 @@ function parseRecipientEmailsFromBody(body) {
     out.push(e)
   }
   return out
+}
+
+/** Email lãnh đạo — có link duyệt (bắt buộc ít nhất một). */
+function parseRecipientEmailsFromBody(body) {
+  return parseEmailListFromBody(body, 'recipientEmails')
+}
+
+/** Email nhân sự trùng tên người nộp — chỉ thông báo, không link duyệt. */
+function parseStaffNotifyEmailsFromBody(body) {
+  return parseEmailListFromBody(body, 'staffNotifyEmails')
 }
 
 function formatDdMmYyyy(ymd) {
@@ -105,6 +115,165 @@ function buildLeaderEmailText(data, approveUrl, dashboardUrl) {
   ].join('\n')
 }
 
+/** Nhân sự / CC: tóm tắt + dashboard, không gửi link duyệt. */
+function buildStaffNotifyEmailText(data, dashboardUrl) {
+  return [
+    buildResultSummaryText(data),
+    '',
+    'Xem tổng quan (dashboard):',
+    dashboardUrl,
+  ].join('\n')
+}
+
+function escapeHtml(s) {
+  return String(s ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;')
+}
+
+function renderFailureRowsHtml(failures) {
+  if (!failures.length) {
+    return `
+      <tr>
+        <td style="padding:12px 14px;font-size:14px;line-height:22px;color:#6b7280;font-family:Arial,sans-serif;">
+          Không có
+        </td>
+      </tr>
+    `
+  }
+  const rows = failures
+    .map((f) => {
+      const note = f.note ? escapeHtml(f.note) : ''
+      return `
+        <tr>
+          <td style="padding:10px 12px;border-bottom:1px solid #f1f5f9;font-size:13px;line-height:20px;color:#374151;font-family:Arial,sans-serif;vertical-align:top;">${escapeHtml(f.groupTitle)}</td>
+          <td style="padding:10px 12px;border-bottom:1px solid #f1f5f9;font-size:13px;line-height:20px;color:#374151;font-family:Arial,sans-serif;vertical-align:top;">${escapeHtml(f.label)}</td>
+          <td style="padding:10px 12px;border-bottom:1px solid #f1f5f9;font-size:13px;line-height:20px;color:#374151;font-family:Arial,sans-serif;vertical-align:top;">${note || '-'}</td>
+        </tr>
+      `
+    })
+    .join('')
+  return `
+    <tr style="background-color:#f9fafb;">
+      <td style="padding:10px 12px;border-bottom:1px solid #e5e7eb;font-size:13px;line-height:20px;color:#111827;font-weight:700;font-family:Arial,sans-serif;">Nhóm</td>
+      <td style="padding:10px 12px;border-bottom:1px solid #e5e7eb;font-size:13px;line-height:20px;color:#111827;font-weight:700;font-family:Arial,sans-serif;">Hạng mục</td>
+      <td style="padding:10px 12px;border-bottom:1px solid #e5e7eb;font-size:13px;line-height:20px;color:#111827;font-weight:700;font-family:Arial,sans-serif;">Ghi chú</td>
+    </tr>
+    ${rows}
+  `
+}
+
+function buildChecklistEmailHtml(data, options) {
+  const totalErrors = Number(data.totalErrors ?? 0)
+  const isOk = totalErrors === 0
+  const summaryBg = isOk ? '#ecfdf5' : '#fef2f2'
+  const summaryBorder = isOk ? '#a7f3d0' : '#fecaca'
+  const summaryColor = isOk ? '#065f46' : '#991b1b'
+  const summaryText = isOk ? 'Không có lỗi (0)' : `Có ${totalErrors} lỗi cần xử lý`
+  const failures = Array.isArray(data.details) ? data.details.filter((x) => !x.passed) : []
+  const alertHtml = options.alertText
+    ? `<table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="margin-bottom:12px;background-color:#fff7ed;border:1px solid #fed7aa;border-radius:6px;"><tr><td style="padding:12px 14px;font-size:14px;line-height:22px;color:#9a3412;font-family:Arial,sans-serif;"><strong>Cảnh báo:</strong> ${escapeHtml(options.alertText)}</td></tr></table>`
+    : ''
+  const approveButtonHtml = options.approveUrl
+    ? `
+      <tr>
+        <td align="center" style="padding:22px 20px 8px 20px;">
+          <table role="presentation" cellpadding="0" cellspacing="0" border="0">
+            <tr>
+              <td align="center" bgcolor="#2563eb" style="border-radius:6px;">
+                <a href="${escapeHtml(options.approveUrl)}" target="_blank" style="display:inline-block;padding:12px 18px;font-size:14px;line-height:20px;font-weight:700;color:#ffffff;text-decoration:none;font-family:Arial,sans-serif;">
+                  Xem &amp; xác nhận checklist
+                </a>
+              </td>
+            </tr>
+          </table>
+        </td>
+      </tr>
+    `
+    : ''
+
+  return `
+<!doctype html>
+<html lang="vi">
+  <body style="margin:0;padding:0;background-color:#f4f6f8;font-family:Arial,sans-serif;">
+    <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="background-color:#f4f6f8;">
+      <tr>
+        <td align="center" style="padding:20px 12px;">
+          <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="max-width:640px;background-color:#ffffff;border:1px solid #e5e7eb;border-radius:8px;">
+            <tr>
+              <td style="padding:20px 20px 8px 20px;">
+                <div style="font-size:22px;line-height:30px;font-weight:700;color:#111827;font-family:Arial,sans-serif;">
+                  ${escapeHtml(data.checklistTitle)}
+                </div>
+              </td>
+            </tr>
+            <tr>
+              <td style="padding:8px 20px 0 20px;">
+                ${alertHtml}
+                <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="background-color:#f9fafb;border:1px solid #e5e7eb;border-radius:6px;">
+                  <tr>
+                    <td style="padding:12px 14px;font-size:14px;line-height:22px;color:#374151;font-family:Arial,sans-serif;">
+                      <strong style="color:#111827;">Người kiểm tra:</strong> ${escapeHtml(data.submitterName)}${data.submitterEmail ? ` &lt;${escapeHtml(data.submitterEmail)}&gt;` : ''}<br />
+                      <strong style="color:#111827;">Ngày kiểm tra:</strong> ${escapeHtml(formatDdMmYyyy(String(data.checkDate || '')))}
+                    </td>
+                  </tr>
+                </table>
+              </td>
+            </tr>
+            <tr>
+              <td style="padding:16px 20px 0 20px;">
+                <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="background-color:${summaryBg};border:1px solid ${summaryBorder};border-radius:6px;">
+                  <tr>
+                    <td style="padding:14px;font-size:16px;line-height:24px;color:${summaryColor};font-family:Arial,sans-serif;">
+                      <strong>Tổng kết:</strong> ${escapeHtml(summaryText)}
+                    </td>
+                  </tr>
+                </table>
+              </td>
+            </tr>
+            <tr>
+              <td style="padding:18px 20px 8px 20px;font-size:16px;line-height:24px;font-weight:700;color:#111827;font-family:Arial,sans-serif;">
+                Danh sách lỗi (Không đạt)
+              </td>
+            </tr>
+            <tr>
+              <td style="padding:0 20px;">
+                <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="border:1px solid #e5e7eb;border-radius:6px;background-color:#ffffff;">
+                  ${renderFailureRowsHtml(failures)}
+                </table>
+              </td>
+            </tr>
+            ${approveButtonHtml}
+            <tr>
+              <td align="center" style="padding:${options.approveUrl ? '8px' : '22px'} 20px 20px 20px;">
+                <table role="presentation" cellpadding="0" cellspacing="0" border="0">
+                  <tr>
+                    <td align="center" bgcolor="#111827" style="border-radius:6px;">
+                      <a href="${escapeHtml(options.dashboardUrl)}" target="_blank" style="display:inline-block;padding:11px 18px;font-size:14px;line-height:20px;font-weight:700;color:#ffffff;text-decoration:none;font-family:Arial,sans-serif;">
+                        Xem dashboard
+                      </a>
+                    </td>
+                  </tr>
+                </table>
+              </td>
+            </tr>
+            <tr>
+              <td style="padding:0 20px 20px 20px;font-size:12px;line-height:18px;color:#9ca3af;text-align:center;font-family:Arial,sans-serif;">
+                Email tự động từ hệ thống Checklist. Vui lòng không trả lời email này.
+              </td>
+            </tr>
+          </table>
+        </td>
+      </tr>
+    </table>
+  </body>
+</html>
+  `
+}
+
 function hasSmtpConfig() {
   return Boolean(
     process.env.SMTP_HOST?.trim() && process.env.SMTP_USER?.trim() && process.env.SMTP_PASS?.trim(),
@@ -142,9 +311,10 @@ function createSmtpTransport() {
  * @param {string} to
  * @param {string} subject
  * @param {string} text
+ * @param {string} html
  * @param {{ filename: string, content: string }[] | null} attachments — content đã là base64
  */
-async function sendViaResend(from, to, subject, text, attachments) {
+async function sendViaResend(from, to, subject, text, html, attachments) {
   const key = process.env.RESEND_API_KEY?.trim()
   if (!key) throw new Error('Thiếu RESEND_API_KEY')
   /** @type {Record<string, unknown>} */
@@ -153,6 +323,7 @@ async function sendViaResend(from, to, subject, text, attachments) {
     to: [to],
     subject,
     text,
+    html,
   }
   if (attachments?.length) {
     payload.attachments = attachments.map((a) => ({
@@ -311,17 +482,22 @@ export const handler = async (event) => {
     const dashboardUrl = `${publicBase}/dashboard`
     const textSubmitter = buildSubmitterEmailText(data)
     const textLeader = buildLeaderEmailText(data, approveUrl, dashboardUrl)
+    const textStaffNotify = buildStaffNotifyEmailText(data, dashboardUrl)
+    const htmlSubmitter = buildChecklistEmailHtml(data, { approveUrl: null, dashboardUrl, alertText: '' })
+    const htmlLeader = buildChecklistEmailHtml(data, { approveUrl, dashboardUrl, alertText: '' })
+    const htmlStaffNotify = buildChecklistEmailHtml(data, { approveUrl: null, dashboardUrl, alertText: '' })
     const subjectSubmitter = `[Checklist] Kết quả — ${data.checklistTitle} — ${data.submitterName}`
 
     const toSubmitter = String(data.submitterEmail || '').trim()
     const managers = parseRecipientEmailsFromBody(body)
+    const staffNotify = parseStaffNotifyEmailsFromBody(body)
     if (managers.length === 0) {
       return {
         statusCode: 400,
         headers,
         body: JSON.stringify({
           error:
-            'Thiếu recipientEmails. Ứng dụng phải gửi danh sách từ Manager → Cấu hình email (lãnh đạo + nhân sự trùng tên người nộp). Không đọc LEADER_EMAILS / .env cho danh sách này.',
+            'Thiếu recipientEmails (tab Lãnh đạo). Ứng dụng phải gửi ít nhất một email lãnh đạo từ Manager → Cấu hình email. Nhân sự trùng tên gửi qua staffNotifyEmails (không có link duyệt).',
         }),
       }
     }
@@ -348,10 +524,14 @@ export const handler = async (event) => {
 
     const submitterMailText = textSubmitter + pdfErrorNote
     const leaderMailText = textLeader + pdfErrorNote
+    const staffNotifyMailText = textStaffNotify + pdfErrorNote
+    const submitterMailHtml = htmlSubmitter
+    const leaderMailHtml = htmlLeader
+    const staffNotifyMailHtml = htmlStaffNotify
 
-    const sendOne = async (to, subj, txt, attachments = pdfAttachments) => {
+    const sendOne = async (to, subj, txt, html, attachments = pdfAttachments) => {
       if (useResend) {
-        await sendViaResend(fromHeader, to, subj, txt, attachments)
+        await sendViaResend(fromHeader, to, subj, txt, html, attachments)
         return
       }
       /** @type {import('nodemailer/lib/mailer').Options} */
@@ -360,6 +540,7 @@ export const handler = async (event) => {
         to,
         subject: subj,
         text: txt,
+        html,
       }
       if (attachments?.length && transporter) {
         mail.attachments = attachments.map((a) => ({
@@ -371,8 +552,10 @@ export const handler = async (event) => {
     }
 
     if (toSubmitter) {
-      await sendOne(toSubmitter, subjectSubmitter, submitterMailText)
+      await sendOne(toSubmitter, subjectSubmitter, submitterMailText, submitterMailHtml)
     }
+
+    const managerLower = new Set(managers.map((m) => m.toLowerCase()))
 
     for (const mgr of managers) {
       if (toSubmitter && mgr.toLowerCase() === submitterLower) continue
@@ -383,11 +566,44 @@ export const handler = async (event) => {
       const bodyWithAlert = alert
         ? `Cảnh báo: checklist vượt ngưỡng lỗi (${threshold}).\n\n${leaderMailText}`
         : leaderMailText
+      const htmlWithAlert = alert
+        ? buildChecklistEmailHtml(data, {
+            approveUrl,
+            dashboardUrl,
+            alertText: `Checklist vượt ngưỡng lỗi (${threshold}).`,
+          })
+        : leaderMailHtml
       try {
-        await sendOne(mgr, subj, bodyWithAlert)
+        await sendOne(mgr, subj, bodyWithAlert, htmlWithAlert)
       } catch (e) {
         // eslint-disable-next-line no-console
         console.error('manager mail failed', mgr, e)
+      }
+    }
+
+    for (const staffTo of staffNotify) {
+      const sl = staffTo.toLowerCase()
+      if (toSubmitter && sl === submitterLower) continue
+      if (managerLower.has(sl)) continue
+      const alert = totalErrors > threshold
+      const subjStaff = alert
+        ? `[CẢNH BÁO] Thông báo checklist — ${data.checklistTitle} — ${totalErrors} lỗi`
+        : `[Thông báo] ${data.checklistTitle} — ${data.submitterName}`
+      const bodyStaff = alert
+        ? `Cảnh báo: checklist vượt ngưỡng lỗi (${threshold}).\n\n${staffNotifyMailText}`
+        : staffNotifyMailText
+      const htmlStaff = alert
+        ? buildChecklistEmailHtml(data, {
+            approveUrl: null,
+            dashboardUrl,
+            alertText: `Checklist vượt ngưỡng lỗi (${threshold}).`,
+          })
+        : staffNotifyMailHtml
+      try {
+        await sendOne(staffTo, subjStaff, bodyStaff, htmlStaff)
+      } catch (e) {
+        // eslint-disable-next-line no-console
+        console.error('staff notify mail failed', staffTo, e)
       }
     }
 
