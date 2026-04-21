@@ -100,12 +100,14 @@ function buildResultSummaryText(data) {
 }
 
 function buildSubmitterEmailText(data) {
-  return buildResultSummaryText(data)
+  return [buildResultSummaryText(data), '', 'Lưu ý: Email này có đính kèm file PDF kết quả checklist.'].join('\n')
 }
 
 function buildLeaderEmailText(data, approveUrl, dashboardUrl) {
   return [
     buildResultSummaryText(data),
+    '',
+    'Lưu ý: Email này có đính kèm file PDF kết quả checklist.',
     '',
     'Link duyệt checklist:',
     approveUrl,
@@ -119,6 +121,8 @@ function buildLeaderEmailText(data, approveUrl, dashboardUrl) {
 function buildStaffNotifyEmailText(data, dashboardUrl) {
   return [
     buildResultSummaryText(data),
+    '',
+    'Lưu ý: Email này có đính kèm file PDF kết quả checklist.',
     '',
     'Xem tổng quan (dashboard):',
     dashboardUrl,
@@ -194,6 +198,16 @@ function buildChecklistEmailHtml(data, options) {
       </tr>
     `
     : ''
+  const attachmentNoteHtml = `
+    <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="margin-top:12px;background-color:#eff6ff;border:1px solid #bfdbfe;border-radius:6px;">
+      <tr>
+        <td style="padding:12px 14px;font-size:14px;line-height:22px;color:#1e3a8a;font-family:Arial,sans-serif;">
+          <strong>Lưu ý:</strong> Email này có đính kèm file <strong>PDF kết quả checklist</strong> ở cuối thư.
+          Bạn có thể bấm nút bên dưới để xem checklist online ngay, không cần mở file PDF.
+        </td>
+      </tr>
+    </table>
+  `
 
   return `
 <!doctype html>
@@ -221,6 +235,7 @@ function buildChecklistEmailHtml(data, options) {
                     </td>
                   </tr>
                 </table>
+                ${attachmentNoteHtml}
               </td>
             </tr>
             <tr>
