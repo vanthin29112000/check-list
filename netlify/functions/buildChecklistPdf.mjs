@@ -74,30 +74,12 @@ function formatDdMmYyyy(checkDate) {
   return `${String(d).padStart(2, '0')}/${String(m).padStart(2, '0')}/${y}`
 }
 
-/** Firestore chỉ lưu YYYY-MM-DD; mẫu PDF cũ hiển thị thêm giờ cố định 12:00. */
-function formatNgayKiemTraDisplay(checkDate) {
-  return `${formatDdMmYyyy(checkDate)} 12:00`
-}
-
 function formatDateTime(utc) {
   const t = toDisplayInTz(utc)
   return `${String(t.getDate()).padStart(2, '0')}/${String(t.getMonth() + 1).padStart(2, '0')}/${t.getFullYear()} ${String(t.getHours()).padStart(2, '0')}:${String(t.getMinutes()).padStart(2, '0')}`
 }
 
-function parseLeadingNumber(text) {
-  const m = String(text ?? '').trim().match(/^(\d+)\./)
-  if (!m) return Number.POSITIVE_INFINITY
-  return Number(m[1])
-}
-
-function compareGroupTitle(a, b) {
-  const na = parseLeadingNumber(a)
-  const nb = parseLeadingNumber(b)
-  if (na !== nb) return na - nb
-  return String(a).localeCompare(String(b), 'vi')
-}
-
-/** Chiều ngang bảng chi tiết (4 cột như mẫu xuất cũ). */
+/** Chiều ngang bảng chi tiết (4 cột như mẫu TTQLKTX). */
 function tableLayout(doc) {
   const tableLeft = doc.page.margins.left
   const tableRight = doc.page.width - doc.page.margins.right
@@ -132,7 +114,7 @@ function detailRowHeight(doc, parts, colWs, fs, FONT_REG, FONT_BOLD) {
 
 function drawTableHeader(doc, layout, y, FONT_BOLD) {
   const { colXs, colWs } = layout
-  const headers = ['Thiết bị / hệ thống', 'Tiêu chuẩn', 'Kiểm tra', 'Ghi chú']
+  const headers = ['Thiết bị/hệ thống', 'Tiêu chuẩn', 'Kiểm tra', 'Ghi chú']
   const fs = 9
   doc.fillColor('#000000')
   const h = headerRowHeight(doc, headers, colWs, fs, FONT_BOLD)
@@ -146,14 +128,46 @@ function drawTableHeader(doc, layout, y, FONT_BOLD) {
   return yLine + 8
 }
 
-function drawDetailRow(doc, layout, item, y, FONT_REG, FONT_BOLD) {
+function sectionRowHeight(doc, title, fullW, fs, FONT_BOLD, pad) {
+  doc.font(FONT_BOLD).fontSize(fs)
+  const inner = fullW - pad * 2
+  const h = doc.heightOfString(String(title ?? ''), { width: inner, lineGap: 1 })
+  return Math.max(h + pad * 2, 20)
+}
+
+/** Dòng tiêu đề nhóm (như hàng gộp trong Word: Thiết bị vật lý, …). */
+function drawSectionRow(doc, layout, groupTitle, y, FONT_BOLD, pageBottom) {
+  const { tableLeft, tableRight } = layout
+  const fullW = tableRight - tableLeft
+  const fs = 9
+  const pad = 6
+  const rowH = sectionRowHeight(doc, groupTitle, fullW, fs, FONT_BOLD, pad)
+  if (y + rowH + 4 > pageBottom) {
+    doc.addPage()
+    y = doc.page.margins.top
+    y = drawTableHeader(doc, layout, y, FONT_BOLD)
+  }
+  doc.save()
+  doc.fillColor('#eeeeee').rect(tableLeft, y, fullW, rowH).fill()
+  doc.restore()
+  doc.fillColor('#000000').font(FONT_BOLD).fontSize(fs)
+  doc.text(String(groupTitle ?? ''), tableLeft + pad, y + pad, { width: fullW - pad * 2, lineGap: 1 })
+  return y + rowH + 4
+}
+
+function drawDetailRow(doc, layout, item, y, FONT_REG, FONT_BOLD, pageBottom, redrawHeader) {
   const { colXs, colWs } = layout
   const passed = Boolean(item.passed)
-  const status = passed ? 'Đạt' : 'Không đạt'
+  const status = passed ? 'Đạt' : 'Không'
   const note = item.note ? String(item.note) : ''
   const fs = 8
   const parts = [String(item.label ?? ''), String(item.standard ?? ''), status, note]
   const maxH = detailRowHeight(doc, parts, colWs, fs, FONT_REG, FONT_BOLD)
+  if (y + maxH + 10 > pageBottom) {
+    doc.addPage()
+    y = doc.page.margins.top
+    y = redrawHeader(doc, layout, y)
+  }
   const rowTop = y
   doc.font(FONT_REG).fontSize(fs).fillColor('#000000')
   doc.text(parts[0], colXs[0], rowTop, { width: colWs[0], lineGap: 1 })
@@ -182,15 +196,6 @@ export function buildChecklistPdfBase64(raw) {
     approvedAtUtc: raw.isApproved ? toJsDate(raw.approvedAtUtc) : null,
     details: Array.isArray(raw.details) ? raw.details : [],
   }
-
-  const byGroup = new Map()
-  for (const d of result.details) {
-    const g = String(d.groupTitle ?? '')
-    const list = byGroup.get(g) ?? []
-    list.push(d)
-    byGroup.set(g, list)
-  }
-  const groupKeys = [...byGroup.keys()].sort(compareGroupTitle)
 
   const fileName = `checklist-${result.checklistKey}-${String(result.checkDate).replace(/-/g, '')}.pdf`
 
@@ -231,13 +236,13 @@ export function buildChecklistPdfBase64(raw) {
     yL = doc.y
     doc.font(FONT_BOLD).text('PHÒNG CTSV-CĐS', xL, yL, { width: colW, align: 'center', lineGap: 2 })
     yL = doc.y
-    doc.font(FONT_REG).text('Số: /CL-CNTTDL', xL, yL, { width: colW, align: 'center', lineGap: 2 })
+    doc.font(FONT_REG).text('Số:       /CL-CNTTDL', xL, yL, { width: colW, align: 'center', lineGap: 2 })
     yL = doc.y
 
     let yR = y0
     doc.font(FONT_BOLD).text('CỘNG HÒA XÃ HỘI CHỦ NGHĨA VIỆT NAM', xR, yR, { width: colW, align: 'center', lineGap: 2 })
     yR = doc.y
-    doc.font(FONT_REG).text('Độc lập - Tự do - Hạnh phúc', xR, yR, { width: colW, align: 'center', lineGap: 2 })
+    doc.font(FONT_REG).text('Độc lập – Tự do – Hạnh phúc', xR, yR, { width: colW, align: 'center', lineGap: 2 })
     yR = doc.y
     doc.font(FONT_ITALIC).text(dateLine, xR, yR, { width: colW, align: 'center', lineGap: 2 })
     yR = doc.y
@@ -250,44 +255,34 @@ export function buildChecklistPdfBase64(raw) {
     const contentW = doc.page.width - m.left - m.right
     doc.x = m.left
     doc.font(FONT_BOLD).fontSize(13).text(String(result.checklistTitle).toUpperCase(), m.left, doc.y, { width: contentW, align: 'center' })
-    doc.font(FONT_REG).fontSize(10)
-    doc.moveDown(0.4)
-    doc.text(`Người check: ${result.submitterName}`, m.left, doc.y, { width: contentW, align: 'center' })
-    doc.text(`(${result.submitterEmail})`, m.left, doc.y, { width: contentW, align: 'center' })
-    doc.text(`Ngày kiểm tra: ${formatNgayKiemTraDisplay(result.checkDate)}`, m.left, doc.y, { width: contentW, align: 'center' })
-    doc.text(`Ngày gửi: ${formatDateTime(result.createdAtUtc)} (GMT+7)`, m.left, doc.y, { width: contentW, align: 'center' })
-    doc.font(FONT_BOLD).text(`Tổng lỗi: ${result.totalErrors}`, m.left, doc.y, { width: contentW, align: 'center' })
-    doc.font(FONT_REG).moveDown(0.6)
+    doc.font(FONT_REG).fontSize(9)
+    doc.moveDown(0.35)
+    doc.text(`Ngày kiểm tra: ${formatDdMmYyyy(result.checkDate)}`, m.left, doc.y, { width: contentW, align: 'center' })
+    doc.font(FONT_ITALIC).fontSize(8).fillColor('#444444')
+    const audit =
+      result.totalErrors > 0
+        ? `${result.totalErrors} mục Không · Gửi ${formatDateTime(result.createdAtUtc)} (GMT+7)`
+        : `Gửi ${formatDateTime(result.createdAtUtc)} (GMT+7)`
+    doc.text(audit, m.left, doc.y, { width: contentW, align: 'center' })
+    doc.fillColor('#000000').font(FONT_REG).fontSize(10).moveDown(0.5)
 
     const layout = tableLayout(doc)
     const pageBottom = doc.page.height - doc.page.margins.bottom - 48
+    const redrawHeader = (d, lay, yy) => drawTableHeader(d, lay, yy, FONT_BOLD)
 
-    for (const g of groupKeys) {
-      const items = (byGroup.get(g) ?? []).slice().sort((a, b) => String(a.label).localeCompare(String(b.label)))
-      doc.font(FONT_BOLD).fontSize(11).fillColor('#000000').text(g)
-      doc.font(FONT_REG).moveDown(0.15)
-      let y = doc.y
-      y = drawTableHeader(doc, layout, y, FONT_BOLD)
-
-      for (const item of items) {
-        const passed = Boolean(item.passed)
-        const status = passed ? 'Đạt' : 'Không đạt'
-        const note = item.note ? String(item.note) : ''
-        const parts = [String(item.label ?? ''), String(item.standard ?? ''), status, note]
-        const estH = detailRowHeight(doc, parts, layout.colWs, 8, FONT_REG, FONT_BOLD) + 10
-        if (y + estH > pageBottom) {
-          doc.addPage()
-          y = doc.page.margins.top
-          doc.font(FONT_BOLD).fontSize(10).text(`${g} (tiếp)`, layout.tableLeft, y)
-          doc.moveDown(0.2)
-          y = doc.y
-          y = drawTableHeader(doc, layout, y, FONT_BOLD)
-        }
-        y = drawDetailRow(doc, layout, item, y, FONT_REG, FONT_BOLD)
+    let y = doc.y
+    y = drawTableHeader(doc, layout, y, FONT_BOLD)
+    let prevGroup = null
+    for (const item of result.details) {
+      const g = String(item.groupTitle ?? '')
+      if (g !== prevGroup) {
+        prevGroup = g
+        y = drawSectionRow(doc, layout, g, y, FONT_BOLD, pageBottom)
       }
-      doc.y = y
-      doc.moveDown(0.35)
+      y = drawDetailRow(doc, layout, item, y, FONT_REG, FONT_BOLD, pageBottom, redrawHeader)
     }
+    doc.y = y
+    doc.moveDown(0.25)
 
     doc.moveTo(36, doc.y).lineTo(doc.page.width - 36, doc.y).stroke()
     doc.moveDown(1)

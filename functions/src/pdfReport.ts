@@ -1,5 +1,5 @@
 import PDFDocument from "pdfkit";
-import type { ChecklistResultDoc, ChecklistResultDetailDoc } from "./models";
+import type { ChecklistResultDoc } from "./models";
 
 const MANAGER_NAME = "Nguyễn Hoàng Bảo Trung";
 const TZ = "Asia/Ho_Chi_Minh";
@@ -15,14 +15,6 @@ function toDisplayOptional(utc: Date | null | undefined): Date | null {
 }
 
 export function generateChecklistPdfBuffer(result: ChecklistResultDoc): Promise<Buffer> {
-  const byGroup = new Map<string, ChecklistResultDetailDoc[]>();
-  for (const d of result.details) {
-    const list = byGroup.get(d.groupTitle) ?? [];
-    list.push(d);
-    byGroup.set(d.groupTitle, list);
-  }
-  const groupKeys = [...byGroup.keys()].sort((a, b) => a.localeCompare(b));
-
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = [];
     const doc = new PDFDocument({ size: "A4", margin: 36 });
@@ -34,10 +26,10 @@ export function generateChecklistPdfBuffer(result: ChecklistResultDoc): Promise<
     doc.text("TRUNG TÂM QUẢN LÝ KÝ TÚC XÁ", { align: "center" }).moveDown(0.2);
     doc.font("Helvetica-Bold").text("PHÒNG CTSV-CĐS", { align: "center" }).font("Helvetica");
     doc.moveDown(0.3);
-    doc.text("Số:      /CL-CNTTDL", { align: "center" });
+    doc.text("Số:       /CL-CNTTDL", { align: "center" });
     doc.moveDown(0.8);
     doc.font("Helvetica-Bold").text("CỘNG HÒA XÃ HỘI CHỦ NGHĨA VIỆT NAM", { align: "center" });
-    doc.text("Độc lập - Tự do - Hạnh phúc", { align: "center" }).font("Helvetica");
+    doc.text("Độc lập – Tự do – Hạnh phúc", { align: "center" }).font("Helvetica");
     const created = toDisplayInTz(result.createdAtUtc);
     doc.moveDown(0.3);
     doc
@@ -53,27 +45,43 @@ export function generateChecklistPdfBuffer(result: ChecklistResultDoc): Promise<
     doc.font("Helvetica-Bold").fontSize(13).text(result.checklistTitle.toUpperCase(), { align: "center" });
     doc.font("Helvetica").fontSize(10);
     doc.moveDown(0.4);
-    doc.text(`Người check: ${result.submitterName} (${result.submitterEmail})`);
-    doc.text(`Ngày kiểm tra: ${formatDdMmYyyy(result.checkDate)}`);
-    doc.text(`Ngày gửi: ${formatDateTime(result.createdAtUtc)} (GMT+7)`);
-    doc.font("Helvetica-Bold").text(`Tổng lỗi: ${result.totalErrors}`);
-    doc.font("Helvetica").moveDown(0.6);
+    doc.font("Helvetica").text(`Ngày kiểm tra: ${formatDdMmYyyy(result.checkDate)}`, { align: "center" });
+    doc
+      .font("Helvetica-Oblique")
+      .fontSize(8)
+      .fillColor("#444444")
+      .text(
+        result.totalErrors > 0
+          ? `${result.totalErrors} mục Không · Gửi ${formatDateTime(result.createdAtUtc)} (GMT+7)`
+          : `Gửi ${formatDateTime(result.createdAtUtc)} (GMT+7)`,
+        { align: "center" },
+      );
+    doc.fillColor("#000000").font("Helvetica").fontSize(10).moveDown(0.5);
 
-    for (const g of groupKeys) {
-      const items = (byGroup.get(g) ?? []).slice().sort((a, b) => a.label.localeCompare(b.label));
-      doc.font("Helvetica-Bold").fontSize(11).text(g);
-      doc.font("Helvetica").fontSize(9).moveDown(0.2);
-      for (const item of items) {
-        if (doc.y > doc.page.height - 80) doc.addPage();
-        doc.font("Helvetica-Bold").text(item.label, { continued: false });
-        doc.font("Helvetica").fontSize(8).text(`Tiêu chuẩn: ${item.standard}`);
-        const status = item.passed ? "Đạt" : "Không đạt";
-        doc.fillColor(item.passed ? "#166534" : "#b91c1c").font("Helvetica-Bold").text(`Kết quả: ${status}`);
-        doc.fillColor("#000000").font("Helvetica");
-        if (item.note) doc.text(`Ghi chú: ${item.note}`);
-        doc.moveDown(0.4);
+    doc.font("Helvetica-Bold").fontSize(9).text("Thiết bị/hệ thống · Tiêu chuẩn · Kiểm tra · Ghi chú", {
+      align: "center",
+    });
+    doc.moveDown(0.15);
+    doc.moveTo(36, doc.y).lineTo(doc.page.width - 36, doc.y).stroke();
+    doc.moveDown(0.2);
+
+    let prevGroup: string | null = null;
+    for (const item of result.details) {
+      if (item.groupTitle !== prevGroup) {
+        prevGroup = item.groupTitle;
+        if (doc.y > doc.page.height - 100) doc.addPage();
+        doc.font("Helvetica-Bold").fontSize(10).text(item.groupTitle);
+        doc.font("Helvetica").moveDown(0.15);
       }
-      doc.moveDown(0.3);
+      if (doc.y > doc.page.height - 80) doc.addPage();
+      doc.font("Helvetica-Bold").fontSize(9).text(item.label);
+      const std = item.standard?.trim();
+      if (std) doc.font("Helvetica").fontSize(8).text(`Tiêu chuẩn: ${std}`);
+      const status = item.passed ? "Đạt" : "Không";
+      doc.fillColor(item.passed ? "#166534" : "#b91c1c").font("Helvetica-Bold").text(`Kiểm tra: ${status}`);
+      doc.fillColor("#000000").font("Helvetica");
+      if (item.note) doc.fontSize(8).text(`Ghi chú: ${item.note}`);
+      doc.moveDown(0.35);
     }
 
     doc.moveTo(36, doc.y).lineTo(doc.page.width - 36, doc.y).stroke();
