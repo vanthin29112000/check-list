@@ -189,7 +189,7 @@ function buildChecklistEmailHtml(data, options) {
             <tr>
               <td align="center" bgcolor="#2563eb" style="border-radius:6px;">
                 <a href="${escapeHtml(options.approveUrl)}" target="_blank" style="display:inline-block;padding:12px 18px;font-size:14px;line-height:20px;font-weight:700;color:#ffffff;text-decoration:none;font-family:Arial,sans-serif;">
-                  Xem &amp; xác nhận checklist
+                  Duyệt check list
                 </a>
               </td>
             </tr>

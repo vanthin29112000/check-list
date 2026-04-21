@@ -8,6 +8,7 @@ import {
   Grid,
   Input,
   Modal,
+  Progress,
   Radio,
   Row,
   Select,
@@ -61,6 +62,7 @@ export default function ChecklistFormPage() {
   const [submitPhaseText, setSubmitPhaseText] = useState('Đang xử lý...')
   const [notiApi, contextHolder] = notification.useNotification()
   const hydratedDraftRef = useRef(false)
+  const touchStartXRef = useRef<Record<string, number>>({})
 
   async function reloadCompletionStatus() {
     const completion = await fetchCompletionStatus({ date: checkDate.format('YYYY-MM-DD') })
@@ -244,6 +246,21 @@ export default function ChecklistFormPage() {
 
     return { totalItems, passedCount, failedCount, unansweredCount, missingFailedNotes }
   }, [allItems, passedByKey, subPassedByKey, noteByKey])
+  const completedPercent = useMemo(() => {
+    if (summary.totalItems <= 0) return 0
+    return Math.round(((summary.passedCount + summary.failedCount) / summary.totalItems) * 100)
+  }, [summary.totalItems, summary.passedCount, summary.failedCount])
+
+  function scrollToNextItem(itemKey: string) {
+    const idx = allItems.findIndex((x) => x.key === itemKey)
+    if (idx < 0) return
+    const next = allItems[idx + 1]
+    if (!next) return
+    window.setTimeout(() => {
+      const el = document.getElementById(`check-item-${next.key}`)
+      el?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    }, 120)
+  }
 
   function setPassed(itemKey: string, passed: boolean) {
     if (invalidItemKey === itemKey) setInvalidItemKey(null)
@@ -258,6 +275,23 @@ export default function ChecklistFormPage() {
   function setSubPassed(itemKey: string, subKey: string, passed: boolean) {
     if (invalidItemKey === itemKey) setInvalidItemKey(null)
     setSubPassedByKey((s) => ({ ...s, [subStateKey(itemKey, subKey)]: passed }))
+  }
+
+  function applyItemDecision(itemKey: string, passed: boolean) {
+    setPassed(itemKey, passed)
+    scrollToNextItem(itemKey)
+  }
+
+  function onItemTouchStart(itemKey: string, x: number) {
+    touchStartXRef.current[itemKey] = x
+  }
+
+  function onItemTouchEnd(itemKey: string, x: number) {
+    const start = touchStartXRef.current[itemKey]
+    if (typeof start !== 'number') return
+    const dx = x - start
+    if (Math.abs(dx) < 56) return
+    applyItemDecision(itemKey, dx > 0)
   }
 
   function focusInvalidItem(itemKey: string, focusNote = false) {
@@ -577,31 +611,69 @@ export default function ChecklistFormPage() {
         />
       )}
 
+      {isMobile && (
+        <Card size="small" className="mobile-sticky-overview">
+          <Space direction="vertical" style={{ width: '100%' }} size={6}>
+            <Typography.Text strong>{active ? checklistDropdownLabel(active.key, active.title) : 'Chọn checklist'}</Typography.Text>
+            <Typography.Text type="secondary">
+              Bạn đã kiểm tra {summary.passedCount + summary.failedCount}/{summary.totalItems || 0} mục
+            </Typography.Text>
+            <Progress
+              percent={completedPercent}
+              strokeColor={summary.failedCount > 0 ? '#ef4444' : '#16a34a'}
+              trailColor="#e5e7eb"
+              showInfo
+            />
+            <Button
+              type="primary"
+              block
+              onClick={openConfirmBeforeSubmit}
+              disabled={!active || summary.totalItems === 0 || !hasAnyAvailableChecklist}
+            >
+              Gửi nhanh
+            </Button>
+            <div className="mobile-stats-grid">
+              <div>
+                <Typography.Text type="secondary">Tổng</Typography.Text>
+                <Typography.Title level={5} style={{ margin: 0 }}>{summary.totalItems}</Typography.Title>
+              </div>
+              <div>
+                <Typography.Text type="secondary">Đạt</Typography.Text>
+                <Typography.Title level={5} style={{ margin: 0, color: '#16a34a' }}>{summary.passedCount}</Typography.Title>
+              </div>
+              <div>
+                <Typography.Text type="secondary">Lỗi</Typography.Text>
+                <Typography.Title level={5} style={{ margin: 0, color: '#dc2626' }}>{summary.failedCount}</Typography.Title>
+              </div>
+              <div>
+                <Typography.Text type="secondary">Chưa chọn</Typography.Text>
+                <Typography.Title level={5} style={{ margin: 0, color: '#6b7280' }}>{summary.unansweredCount}</Typography.Title>
+              </div>
+            </div>
+          </Space>
+        </Card>
+      )}
+
       <Card size="small" title="Tổng quan trước khi gửi">
         <Space wrap size={16}>
           <Typography.Text>Tổng mục: {summary.totalItems}</Typography.Text>
+          <Typography.Text type="success">Đạt: {summary.passedCount}</Typography.Text>
           <Typography.Text type={summary.failedCount > 0 ? 'danger' : undefined}>Không đạt: {summary.failedCount}</Typography.Text>
-          <Typography.Text>Đạt: {summary.passedCount}</Typography.Text>
-          <Typography.Text type={summary.unansweredCount > 0 ? 'warning' : undefined}>
-            Chưa chọn: {summary.unansweredCount}
-          </Typography.Text>
-          <Button
-            size="small"
-            onClick={() => {
-              if (!checklistKey) return
-              localStorage.removeItem(draftStorageKey(checklistKey, checkDate))
-              setPassedByKey({})
-              setSubPassedByKey({})
-              setNoteByKey({})
-              setInvalidItemKey(null)
-              setHasTriedSubmit(false)
-              notiApi.success({
-                message: 'Đã xóa bản nháp',
-                description: 'Dữ liệu checklist cục bộ đã được xóa.',
-                placement: 'topRight',
-              })
-            }}
-          >
+          <Typography.Text type={summary.unansweredCount > 0 ? 'secondary' : undefined}>Chưa chọn: {summary.unansweredCount}</Typography.Text>
+          <Button size="small" onClick={() => {
+            if (!checklistKey) return
+            localStorage.removeItem(draftStorageKey(checklistKey, checkDate))
+            setPassedByKey({})
+            setSubPassedByKey({})
+            setNoteByKey({})
+            setInvalidItemKey(null)
+            setHasTriedSubmit(false)
+            notiApi.success({
+              message: 'Đã xóa bản nháp',
+              description: 'Dữ liệu checklist cục bộ đã được xóa.',
+              placement: 'topRight',
+            })
+          }}>
             Xóa bản nháp
           </Button>
         </Space>
@@ -651,7 +723,7 @@ export default function ChecklistFormPage() {
           ) : (
             <Collapse
               size="small"
-              defaultActiveKey={['items']}
+              defaultActiveKey={[]}
               items={[
                 {
                   key: 'items',
@@ -671,13 +743,20 @@ export default function ChecklistFormPage() {
                             key={r.key}
                             id={`check-item-${r.key}`}
                             size="small"
+                            className={`mobile-item-card ${st === true ? 'is-pass' : st === false ? 'is-fail' : ''}`}
                             style={{
                               borderColor: invalidItemKey === r.key || isMissing ? '#ff4d4f' : isFail ? '#ff4d4f' : '#f0f0f0',
-                              background: invalidItemKey === r.key || isFail ? '#fff2f0' : '#fff',
+                              background: invalidItemKey === r.key || isFail ? '#fff2f0' : st === true ? '#f0fdf4' : '#fff',
+                              borderRadius: 14,
                             }}
+                            onTouchStart={(e) => onItemTouchStart(r.key, e.changedTouches[0]?.clientX ?? 0)}
+                            onTouchEnd={(e) => onItemTouchEnd(r.key, e.changedTouches[0]?.clientX ?? 0)}
                           >
                             <Space direction="vertical" style={{ width: '100%' }} size={8}>
-                              <Typography.Text strong>{r.label}</Typography.Text>
+                              <Typography.Text strong>
+                                {st === true ? '✔ ' : st === false ? '✖ ' : ''}
+                                {r.label}
+                              </Typography.Text>
                               <Typography.Text type="secondary">{r.standard}</Typography.Text>
                               {r.subchecks?.length ? (
                                 <Space direction="vertical" style={{ width: '100%' }} size={6}>
@@ -688,6 +767,7 @@ export default function ChecklistFormPage() {
                                       <Radio.Group
                                         optionType="button"
                                         buttonStyle="solid"
+                                        className="mobile-toggle-group"
                                         style={{ display: 'flex', width: '100%' }}
                                         value={
                                           subPassedByKey[subStateKey(r.key, sc.key)] === undefined
@@ -696,12 +776,15 @@ export default function ChecklistFormPage() {
                                               ? 'pass'
                                               : 'fail'
                                         }
-                                        onChange={(e) => setSubPassed(r.key, sc.key, e.target.value === 'pass')}
+                                        onChange={(e) => {
+                                          setSubPassed(r.key, sc.key, e.target.value === 'pass')
+                                          scrollToNextItem(r.key)
+                                        }}
                                       >
-                                        <Radio style={{ flex: 1, textAlign: 'center' }} value="pass">
+                                        <Radio className="mobile-pass-radio" style={{ flex: 1, textAlign: 'center' }} value="pass">
                                           Đạt
                                         </Radio>
-                                        <Radio style={{ flex: 1, textAlign: 'center' }} value="fail">
+                                        <Radio className="mobile-fail-radio" style={{ flex: 1, textAlign: 'center' }} value="fail">
                                           Không
                                         </Radio>
                                       </Radio.Group>
@@ -712,26 +795,32 @@ export default function ChecklistFormPage() {
                                 <Radio.Group
                                   optionType="button"
                                   buttonStyle="solid"
+                                  className="mobile-toggle-group"
                                   style={{ display: 'flex', width: '100%' }}
                                   value={passedByKey[r.key] === undefined ? undefined : passedByKey[r.key] ? 'pass' : 'fail'}
-                                  onChange={(e) => setPassed(r.key, e.target.value === 'pass')}
+                                  onChange={(e) => applyItemDecision(r.key, e.target.value === 'pass')}
                                 >
-                                  <Radio style={{ flex: 1, textAlign: 'center' }} value="pass">
+                                  <Radio className="mobile-pass-radio" style={{ flex: 1, textAlign: 'center' }} value="pass">
                                     Đạt
                                   </Radio>
-                                  <Radio style={{ flex: 1, textAlign: 'center' }} value="fail">
+                                  <Radio className="mobile-fail-radio" style={{ flex: 1, textAlign: 'center' }} value="fail">
                                     Không
                                   </Radio>
                                 </Radio.Group>
                               )}
-                              <Input.TextArea
-                                id={`check-note-${r.key}`}
-                                autoSize={{ minRows: 2, maxRows: 4 }}
-                                value={noteByKey[r.key] ?? ''}
-                                status={isFail && (!(noteByKey[r.key] ?? '').trim() || invalidItemKey === r.key) ? 'error' : undefined}
-                                placeholder={isFail ? 'Bắt buộc ghi chú khi Không đạt' : 'Ghi chú (nếu cần)'}
-                                onChange={(e) => setNote(r.key, e.target.value)}
-                              />
+                              {isFail ? (
+                                <Input.TextArea
+                                  id={`check-note-${r.key}`}
+                                  autoSize={{ minRows: 2, maxRows: 4 }}
+                                  value={noteByKey[r.key] ?? ''}
+                                  status={(!(noteByKey[r.key] ?? '').trim() || invalidItemKey === r.key) ? 'error' : undefined}
+                                  placeholder="Nhập lỗi / vấn đề gặp phải"
+                                  onChange={(e) => setNote(r.key, e.target.value)}
+                                />
+                              ) : null}
+                              <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                                Vuốt phải để chọn Đạt · Vuốt trái để chọn Không
+                              </Typography.Text>
                             </Space>
                           </Card>
                         )
@@ -800,6 +889,43 @@ export default function ChecklistFormPage() {
           font-size: 12px;
           color: #595959;
           margin-bottom: 8px;
+        }
+        .mobile-sticky-overview {
+          position: sticky;
+          top: 8px;
+          z-index: 12;
+          border-radius: 16px;
+          box-shadow: 0 8px 24px rgba(15, 23, 42, 0.08);
+        }
+        .mobile-stats-grid {
+          display: grid;
+          grid-template-columns: repeat(4, minmax(0, 1fr));
+          gap: 8px;
+          padding-top: 4px;
+        }
+        .mobile-item-card {
+          transition: transform 0.15s ease, box-shadow 0.15s ease;
+        }
+        .mobile-item-card.is-pass {
+          box-shadow: 0 0 0 1px #86efac inset;
+        }
+        .mobile-item-card.is-fail {
+          box-shadow: 0 0 0 1px #fca5a5 inset;
+        }
+        .mobile-toggle-group .ant-radio-button-wrapper {
+          min-height: 42px;
+          line-height: 40px;
+          font-weight: 600;
+        }
+        .mobile-toggle-group .mobile-pass-radio.ant-radio-button-wrapper-checked {
+          background: #16a34a;
+          border-color: #16a34a;
+          color: #fff;
+        }
+        .mobile-toggle-group .mobile-fail-radio.ant-radio-button-wrapper-checked {
+          background: #dc2626;
+          border-color: #dc2626;
+          color: #fff;
         }
       `}</style>
     </Space>

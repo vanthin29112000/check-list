@@ -5,11 +5,12 @@ import {
   CalendarOutlined,
   CheckCircleOutlined,
   ClockCircleOutlined,
+  MenuOutlined,
   FileSearchOutlined,
   MailOutlined,
   UserSwitchOutlined,
 } from '@ant-design/icons'
-import { Badge, Button, Layout, Menu, Segmented, Space, Tooltip, Typography } from 'antd'
+import { Badge, Button, Drawer, Grid, Layout, Menu, Segmented, Space, Tooltip, Typography } from 'antd'
 import type { MenuProps } from 'antd'
 import { Link, Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom'
 import dayjs from 'dayjs'
@@ -25,9 +26,12 @@ type UserRole = 'staff' | 'manager'
 const { Sider, Header, Content } = Layout
 
 export default function App() {
+  const { lg } = Grid.useBreakpoint()
+  const isMobile = !lg
   const loc = useLocation()
   const navigate = useNavigate()
   const redirectedRef = useRef(false)
+  const [mobileNavOpen, setMobileNavOpen] = useState(false)
   const [role, setRole] = useState<UserRole>(() => (localStorage.getItem('app-role') as UserRole) || 'staff')
   const [status, setStatus] = useState({ missingToday: 0, pendingApprovals: 0 })
 
@@ -84,6 +88,10 @@ export default function App() {
     if (!loc.pathname.startsWith('/email-config')) return
     void navigate('/', { replace: true })
   }, [role, loc.pathname, navigate])
+
+  useEffect(() => {
+    setMobileNavOpen(false)
+  }, [loc.pathname])
 
   const menuItems = useMemo<MenuProps['items']>(() => {
     const actionLabel = (
@@ -193,54 +201,66 @@ export default function App() {
 
   return (
     <Layout style={{ minHeight: '100vh' }}>
-      <Sider
-        breakpoint="lg"
-        collapsedWidth={0}
-        width={280}
-        style={{ background: '#0f172a' }}
-      >
-        <div style={{ padding: 16, color: '#fff' }}>
-          <Typography.Title level={4} style={{ color: '#fff', margin: 0 }}>
-            Checklist vận hành
-          </Typography.Title>
-          <Typography.Text style={{ color: '#cbd5e1' }}>
-            Ký túc xá - Theo ca
-          </Typography.Text>
-        </div>
-        <Menu
-          theme="dark"
-          mode="inline"
-          selectedKeys={key === 'approve' ? [] : [key]}
-          items={menuItems}
-        />
-      </Sider>
+      {!isMobile && (
+        <Sider
+          breakpoint="lg"
+          collapsedWidth={0}
+          width={280}
+          style={{ background: '#0f172a' }}
+        >
+          <div style={{ padding: 16, color: '#fff' }}>
+            <Typography.Title level={4} style={{ color: '#fff', margin: 0 }}>
+              Checklist vận hành
+            </Typography.Title>
+            <Typography.Text style={{ color: '#cbd5e1' }}>
+              Ký túc xá - Theo ca
+            </Typography.Text>
+          </div>
+          <Menu
+            theme="dark"
+            mode="inline"
+            selectedKeys={key === 'approve' ? [] : [key]}
+            items={menuItems}
+          />
+        </Sider>
+      )}
       <Layout>
-        <Header style={{ background: '#fff', borderBottom: '1px solid #f0f0f0', paddingInline: 16 }}>
-          <Space style={{ width: '100%', justifyContent: 'space-between' }}>
-            <Space>
-              <Button type="primary" icon={<CheckCircleOutlined />} onClick={() => navigate('/')}>
-                Thực hiện checklist
-              </Button>
-              {status.missingToday > 0 ? (
-                <Badge color="red" text={`Chưa checklist hôm nay: ${status.missingToday}`} />
-              ) : (
-                <Badge color="green" text="Đã hoàn thành checklist hôm nay" />
-              )}
+        <Header style={{ background: '#fff', borderBottom: '1px solid #f0f0f0', paddingInline: isMobile ? 12 : 16, height: 'auto', lineHeight: 1, paddingBlock: 10 }}>
+          <Space direction="vertical" style={{ width: '100%' }} size={8}>
+            <Space style={{ width: '100%', justifyContent: 'space-between' }}>
+              <Space size={8}>
+                {isMobile && (
+                  <Button
+                    icon={<MenuOutlined />}
+                    onClick={() => setMobileNavOpen(true)}
+                    aria-label="Mở menu điều hướng"
+                  />
+                )}
+                <Button type="primary" icon={<CheckCircleOutlined />} onClick={() => navigate('/')}>
+                  {isMobile ? 'Checklist' : 'Thực hiện checklist'}
+                </Button>
+              </Space>
+              <Space size={6}>
+                <UserSwitchOutlined />
+                <Segmented<UserRole>
+                  size={isMobile ? 'small' : 'middle'}
+                  value={role}
+                  options={[
+                    { label: 'Staff', value: 'staff' },
+                    { label: 'Manager', value: 'manager' },
+                  ]}
+                  onChange={(v) => setRole(v)}
+                />
+              </Space>
             </Space>
-            <Space>
-              <UserSwitchOutlined />
-              <Segmented<UserRole>
-                value={role}
-                options={[
-                  { label: 'Staff', value: 'staff' },
-                  { label: 'Manager', value: 'manager' },
-                ]}
-                onChange={(v) => setRole(v)}
-              />
-            </Space>
+            {status.missingToday > 0 ? (
+              <Badge color="red" text={`Chưa checklist hôm nay: ${status.missingToday}`} />
+            ) : (
+              <Badge color="green" text="Đã hoàn thành checklist hôm nay" />
+            )}
           </Space>
         </Header>
-        <Content style={{ padding: 24 }}>
+        <Content style={{ padding: isMobile ? 12 : 24 }}>
           <Routes>
             <Route path="/approve" element={<ApprovePage />} />
             <Route path="/" element={<ChecklistFormPage />} />
@@ -252,6 +272,26 @@ export default function App() {
           </Routes>
         </Content>
       </Layout>
+      {isMobile && (
+        <Drawer
+          title="Checklist vận hành"
+          placement="left"
+          width={300}
+          onClose={() => setMobileNavOpen(false)}
+          open={mobileNavOpen}
+          styles={{ body: { padding: 0, background: '#0f172a' }, header: { padding: '12px 16px' } }}
+        >
+          <div style={{ padding: 12, color: '#fff' }}>
+            <Typography.Text style={{ color: '#cbd5e1' }}>Ký túc xá - Theo ca</Typography.Text>
+          </div>
+          <Menu
+            theme="dark"
+            mode="inline"
+            selectedKeys={key === 'approve' ? [] : [key]}
+            items={menuItems}
+          />
+        </Drawer>
+      )}
     </Layout>
   )
 }

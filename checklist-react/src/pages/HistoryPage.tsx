@@ -1,11 +1,14 @@
-import { useEffect, useMemo, useState } from 'react'
-import { Button, Card, DatePicker, Select, Space, Table, Tag, Typography, notification } from 'antd'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { Button, Card, DatePicker, Grid, Progress, Segmented, Select, Space, Table, Tag, Typography, notification } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
 import dayjs, { Dayjs } from 'dayjs'
 import { downloadChecklistPdf, fetchDailyStatus, fetchDefinitions, fetchHistory, resendChecklistEmail } from '../api/client'
 import type { ChecklistDefinition, DailyStatusChecklist, DailyStatusRow, HistoryRow } from '../api/types'
 
 export default function HistoryPage() {
+  const { md } = Grid.useBreakpoint()
+  const isMobile = !md
+  const todayCardRef = useRef<HTMLDivElement | null>(null)
   const [catalog, setCatalog] = useState<ChecklistDefinition[]>([])
   const [checklistKey, setChecklistKey] = useState<string | undefined>()
   const [checkDate, setCheckDate] = useState<Dayjs | null>(null)
@@ -14,6 +17,8 @@ export default function HistoryPage() {
   const [total, setTotal] = useState(0)
   const [rows, setRows] = useState<HistoryRow[]>([])
   const [month, setMonth] = useState<Dayjs>(dayjs())
+  const [mobileScheduleView, setMobileScheduleView] = useState<'list' | 'calendar'>('list')
+  const [dayQuickFilter, setDayQuickFilter] = useState<'all' | 'error' | 'ok' | 'weekly_pending'>('all')
   const [dailyRows, setDailyRows] = useState<DailyStatusRow[]>([])
   const [notiApi, contextHolder] = notification.useNotification()
 
@@ -54,6 +59,14 @@ export default function HistoryPage() {
   useEffect(() => {
     void loadDailyStatus(month)
   }, [month])
+
+  useEffect(() => {
+    if (!isMobile || mobileScheduleView !== 'list') return
+    const t = window.setTimeout(() => {
+      todayCardRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    }, 250)
+    return () => window.clearTimeout(t)
+  }, [month, isMobile, mobileScheduleView])
 
   const columns: ColumnsType<HistoryRow> = [
     {
@@ -167,6 +180,7 @@ export default function HistoryPage() {
               pagination={false}
               rowKey="itemKey"
               dataSource={items}
+              scroll={{ x: 860 }}
               bordered
               columns={[
                 {
@@ -232,17 +246,51 @@ export default function HistoryPage() {
       })
   }, [dailyRows, catalog])
 
+  const mobileDayCards = useMemo(() => {
+    return dailyRows
+      .map((r) => {
+        const date = dayjs(r.checkDate)
+        const counts = { ok: 0, missing: 0, weeklyPending: 0, na: 0 }
+        for (const c of r.checklists) {
+          if (c.status === 'checked' || c.status === 'weekly_done') counts.ok += 1
+          else if (c.status === 'weekly_pending') counts.weeklyPending += 1
+          else if (c.status === 'not_required') counts.na += 1
+          else counts.missing += 1
+        }
+        const total = r.checklists.length
+        const done = counts.ok + counts.na
+        const progress = total > 0 ? Math.round((done / total) * 100) : 0
+        const isToday = date.isSame(dayjs(), 'day')
+        const hasError = counts.missing > 0 || counts.weeklyPending > 0
+        return {
+          date,
+          counts,
+          total,
+          progress,
+          isToday,
+          hasError,
+        }
+      })
+      .filter((x) => {
+        if (dayQuickFilter === 'all') return true
+        if (dayQuickFilter === 'error') return x.hasError
+        if (dayQuickFilter === 'ok') return !x.hasError && x.counts.ok > 0
+        if (dayQuickFilter === 'weekly_pending') return x.counts.weeklyPending > 0
+        return true
+      })
+  }, [dailyRows, dayQuickFilter])
+
   return (
     <>
       {contextHolder}
       <Card
       title="Lịch sử checklist"
       extra={
-        <Space wrap>
+        <Space wrap direction={isMobile ? 'vertical' : 'horizontal'} style={isMobile ? { width: '100%' } : undefined}>
           <Select
             allowClear
             placeholder="Lọc theo checklist"
-            style={{ width: 240 }}
+            style={{ width: isMobile ? '100%' : 240 }}
             options={catalog.map((c) => ({ label: c.title, value: c.key }))}
             value={checklistKey}
             onChange={(v) => setChecklistKey(v)}
@@ -264,6 +312,8 @@ export default function HistoryPage() {
         rowKey="id"
         columns={columns}
         dataSource={rows}
+        size={isMobile ? 'small' : 'middle'}
+        scroll={{ x: 1100 }}
         pagination={{
           current: page,
           pageSize,
@@ -283,75 +333,148 @@ export default function HistoryPage() {
       title="Theo dõi checklist theo tuần"
       style={{ marginTop: 16 }}
       extra={
-        <DatePicker
-          picker="month"
-          allowClear={false}
-          value={month}
-          format="MM/YYYY"
-          onChange={(d) => d && setMonth(d)}
-        />
+        <Space wrap>
+          {isMobile && (
+            <Segmented<'list' | 'calendar'>
+              size="small"
+              value={mobileScheduleView}
+              options={[
+                { label: 'List', value: 'list' },
+                { label: 'Calendar', value: 'calendar' },
+              ]}
+              onChange={setMobileScheduleView}
+            />
+          )}
+          <DatePicker
+            picker="month"
+            allowClear={false}
+            value={month}
+            format="MM/YYYY"
+            onChange={(d) => d && setMonth(d)}
+          />
+        </Space>
       }
     >
       <Space wrap style={{ marginBottom: 12 }}>
         <Tag color="green">OK</Tag>
         <Tag color="red">Thiếu</Tag>
         <Tag color="orange">Thiếu tuần</Tag>
-        <Tag color="cyan">Đủ tuần</Tag>
         <Tag>N/A</Tag>
       </Space>
+      {isMobile && mobileScheduleView === 'list' ? (
+        <Space direction="vertical" size="small" style={{ width: '100%' }}>
+          <Segmented<'all' | 'error' | 'ok' | 'weekly_pending'>
+            size="small"
+            value={dayQuickFilter}
+            options={[
+              { label: 'Tất cả', value: 'all' },
+              { label: 'Có lỗi', value: 'error' },
+              { label: 'OK', value: 'ok' },
+              { label: 'Thiếu tuần', value: 'weekly_pending' },
+            ]}
+            onChange={setDayQuickFilter}
+          />
+          {mobileDayCards.map((d) => (
+            <Card
+              key={d.date.format('YYYY-MM-DD')}
+              size="small"
+              ref={d.isToday ? todayCardRef : undefined}
+              hoverable
+              onClick={() => {
+                setCheckDate(d.date)
+                setPage(1)
+              }}
+              style={{
+                borderColor: d.hasError ? '#fca5a5' : d.isToday ? '#86efac' : '#e5e7eb',
+                background: d.hasError ? '#fff7f7' : d.isToday ? '#f6ffed' : '#fff',
+                borderRadius: 14,
+              }}
+            >
+              <Space direction="vertical" size={8} style={{ width: '100%' }}>
+                <Space style={{ width: '100%', justifyContent: 'space-between' }}>
+                  <Typography.Text strong style={{ fontSize: 15 }}>
+                    {d.date.format('DD/MM')} - {weekdayShort(d.date)}
+                  </Typography.Text>
+                  {d.hasError ? <Tag color="red">⚠ Cần chú ý</Tag> : <Tag color="green">Ổn định</Tag>}
+                </Space>
+                <Progress
+                  percent={d.progress}
+                  strokeColor={d.hasError ? '#ef4444' : '#16a34a'}
+                  trailColor="#e5e7eb"
+                  showInfo={false}
+                />
+                <Space wrap size={[8, 8]}>
+                  <Tag color="green">OK {d.counts.ok}</Tag>
+                  <Tag color="red">Thiếu {d.counts.missing}</Tag>
+                  <Tag color="orange">Thiếu tuần {d.counts.weeklyPending}</Tag>
+                  <Tag>N/A {d.counts.na}</Tag>
+                </Space>
+                <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                  Tap để lọc lịch sử theo ngày này
+                </Typography.Text>
+              </Space>
+            </Card>
+          ))}
+        </Space>
+      ) : (
       <Space direction="vertical" size="middle" style={{ width: '100%' }}>
         {weekBlocks.map((week) => (
           <Card key={week.key} size="small" title={week.title}>
-            <div
-              style={{
-                display: 'grid',
-                gridTemplateColumns: 'repeat(7, minmax(0, 1fr))',
-                gap: 8,
-                marginBottom: 8,
-              }}
-            >
-              {['T2', 'T3', 'T4', 'T5', 'T6', 'T7', 'CN'].map((h) => (
-                <div key={h} style={{ textAlign: 'center', fontWeight: 600, color: '#595959' }}>
-                  {h}
-                </div>
-              ))}
-            </div>
-            <div
-              style={{
-                display: 'grid',
-                gridTemplateColumns: 'repeat(7, minmax(0, 1fr))',
-                gap: 8,
-              }}
-            >
-              {week.days.map((d) => {
-                const isFuture = d.date.isAfter(dayjs(), 'day')
-                const isToday = d.date.isSame(dayjs(), 'day')
-                return (
-                  <div
-                    key={d.date.format('YYYY-MM-DD')}
-                    style={{
-                      border: `1px solid ${isToday ? '#52c41a' : '#f0f0f0'}`,
-                      borderRadius: 8,
-                      padding: 8,
-                      minHeight: 114,
-                      background: isToday ? '#f6ffed' : '#fff',
-                      opacity: isFuture ? 0.55 : 1,
-                      boxShadow: isToday ? '0 0 0 1px #b7eb8f inset' : undefined,
-                    }}
-                  >
-                    <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 6 }}>
-                      {d.date.format('DD/MM')}
-                    </div>
-                    <CompactStatusLine label={resolveAssigneeName('cong-khu-a', d.date)} item={d.a} />
-                    <CompactStatusLine label={resolveAssigneeName('cong-khu-b', d.date)} item={d.b} />
-                    <CompactStatusLine label={resolveAssigneeName('phong-server', d.date)} item={d.s} />
+            <div style={{ overflowX: 'auto', paddingBottom: isMobile ? 4 : 0 }}>
+              <div
+                style={{
+                  display: 'grid',
+                  gridTemplateColumns: 'repeat(7, minmax(0, 1fr))',
+                  gap: 8,
+                  marginBottom: 8,
+                  minWidth: 560,
+                }}
+              >
+                {['T2', 'T3', 'T4', 'T5', 'T6', 'T7', 'CN'].map((h) => (
+                  <div key={h} style={{ textAlign: 'center', fontWeight: 600, color: '#595959' }}>
+                    {h}
                   </div>
-                )
-              })}
+                ))}
+              </div>
+              <div
+                style={{
+                  display: 'grid',
+                  gridTemplateColumns: 'repeat(7, minmax(0, 1fr))',
+                  gap: 8,
+                  minWidth: 560,
+                }}
+              >
+                {week.days.map((d) => {
+                  const isFuture = d.date.isAfter(dayjs(), 'day')
+                  const isToday = d.date.isSame(dayjs(), 'day')
+                  return (
+                    <div
+                      key={d.date.format('YYYY-MM-DD')}
+                      style={{
+                        border: `1px solid ${isToday ? '#52c41a' : '#f0f0f0'}`,
+                        borderRadius: 8,
+                        padding: 8,
+                        minHeight: 114,
+                        background: isToday ? '#f6ffed' : '#fff',
+                        opacity: isFuture ? 0.55 : 1,
+                        boxShadow: isToday ? '0 0 0 1px #b7eb8f inset' : undefined,
+                      }}
+                    >
+                      <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 6 }}>
+                        {d.date.format('DD/MM')}
+                      </div>
+                      <CompactStatusLine label={resolveAssigneeName('cong-khu-a', d.date)} item={d.a} />
+                      <CompactStatusLine label={resolveAssigneeName('cong-khu-b', d.date)} item={d.b} />
+                      <CompactStatusLine label={resolveAssigneeName('phong-server', d.date)} item={d.s} />
+                    </div>
+                  )
+                })}
+              </div>
             </div>
           </Card>
         ))}
       </Space>
+      )}
     </Card>
     </>
   )
@@ -399,4 +522,9 @@ function resolveAssigneeName(checklistKey: string, checkDate: Dayjs): string {
   if (day === 1 || day === 2) return 'Chề Long Bảo'
   if (day === 3 || day === 4) return 'Phạm Thanh Tuấn'
   return 'Phan Văn Thìn'
+}
+
+function weekdayShort(d: Dayjs): string {
+  const map = ['CN', 'T2', 'T3', 'T4', 'T5', 'T6', 'T7']
+  return map[d.day()] ?? ''
 }
