@@ -40,8 +40,18 @@ const EMAIL_RECIPIENTS_DOC = 'emailRecipients'
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
 
+/** Gợi ý ban đầu khi chưa có document Firestore — chỉ có tên, cần điền email rồi Lưu. */
 function defaultEmailRecipientsDoc(): EmailRecipientsDocument {
-  return { leaders: [], hrStaff: [] }
+  return {
+    leaders: [{ displayName: 'Nguyễn Hoàng Bảo Trung', email: '' }],
+    hrStaff: [
+      { displayName: 'Chề Long Bảo', email: '' },
+      { displayName: 'Đặng Phi Hùng', email: '' },
+      { displayName: 'Phạm Ngọc Vỹ', email: '' },
+      { displayName: 'Phạm Thanh Tuấn', email: '' },
+      { displayName: 'Phan Văn Thìn', email: '' },
+    ],
+  }
 }
 
 function parseEmailRows(rows: unknown): EmailRecipientRow[] {
@@ -91,16 +101,32 @@ export async function saveEmailRecipientsConfig(cfg: EmailRecipientsDocument): P
   })
 }
 
-export function recipientEmailsFromConfig(cfg: EmailRecipientsDocument): string[] {
+function normalizePersonName(s: string): string {
+  return s.trim().replace(/\s+/g, ' ').toLowerCase()
+}
+
+/**
+ * Danh sách nhận mail dạng lãnh đạo (có link duyệt): tất cả email trong tab Lãnh đạo +
+ * đúng một dòng tab Nhân sự có họ tên trùng người nộp checklist (ô "Họ tên" trên form).
+ */
+export function recipientEmailsForSubmit(cfg: EmailRecipientsDocument, submitterName: string): string[] {
   const seen = new Set<string>()
   const out: string[] = []
-  for (const x of [...cfg.leaders, ...cfg.hrStaff]) {
-    const e = x.email?.trim()
-    if (!e) continue
-    const k = e.toLowerCase()
-    if (seen.has(k)) continue
+  const add = (e: string | undefined) => {
+    const x = (e ?? '').trim()
+    if (!x) return
+    const k = x.toLowerCase()
+    if (seen.has(k)) return
     seen.add(k)
-    out.push(e)
+    out.push(x)
+  }
+  for (const x of cfg.leaders) add(x.email)
+  const sn = normalizePersonName(submitterName)
+  for (const x of cfg.hrStaff) {
+    if (normalizePersonName(x.displayName) === sn) {
+      add(x.email)
+      break
+    }
   }
   return out
 }
@@ -380,10 +406,13 @@ export async function submitChecklist(
   }
   try {
     const cfg = await fetchEmailRecipientsConfig()
-    const recipientEmails = recipientEmailsFromConfig(cfg)
-    await requestChecklistEmailNotification(emailPayload, {
-      recipientEmails: recipientEmails.length > 0 ? recipientEmails : undefined,
-    })
+    const recipientEmails = recipientEmailsForSubmit(cfg, body.submitterName.trim())
+    if (recipientEmails.length === 0) {
+      throw new Error(
+        'Chưa có người nhận mail: vào Manager → Cấu hình email — điền ít nhất một email lãnh đạo; tên trong tab Nhân sự phải trùng (không phân biệt hoa thường) với ô Họ tên khi nộp để thêm email nhân sự đang checklist.',
+      )
+    }
+    await requestChecklistEmailNotification(emailPayload, { recipientEmails })
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e)
     throw new Error(
@@ -703,10 +732,15 @@ export async function resendChecklistEmail(resultId: string): Promise<{ message:
   const r = mapDoc(snap.id, snap.data() as Record<string, unknown>)
   try {
     const cfg = await fetchEmailRecipientsConfig()
-    const recipientEmails = recipientEmailsFromConfig(cfg)
-    await requestChecklistEmailNotification(resultDocToEmailPayload(r), {
-      recipientEmails: recipientEmails.length > 0 ? recipientEmails : undefined,
-    })
+    const recipientEmails = recipientEmailsForSubmit(cfg, r.submitterName)
+    if (recipientEmails.length === 0) {
+      return {
+        message:
+          'Chưa có người nhận: kiểm tra Cấu hình email (lãnh đạo + tên người gửi trùng tab Nhân sự).',
+        skipped: true,
+      }
+    }
+    await requestChecklistEmailNotification(resultDocToEmailPayload(r), { recipientEmails })
     return { message: 'Đã gửi lại email (Resend).' }
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e)

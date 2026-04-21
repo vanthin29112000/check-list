@@ -21,32 +21,7 @@ function corsHeaders(requestOrigin) {
   }
 }
 
-function splitEmails(raw) {
-  if (!raw?.trim()) return []
-  return raw
-    .split(/[,;\n]/g)
-    .map((s) => s.trim())
-    .filter(Boolean)
-}
-
-function collectNotificationRecipients() {
-  const raw = [
-    ...splitEmails(process.env.LEADER_EMAILS),
-    ...splitEmails(process.env.HR_EMAILS),
-    ...splitEmails(process.env.MANAGER_EMAILS),
-  ]
-  const seen = new Set()
-  const out = []
-  for (const e of raw) {
-    const k = e.toLowerCase()
-    if (seen.has(k)) continue
-    seen.add(k)
-    out.push(e)
-  }
-  return out
-}
-
-/** Danh sách email do app gửi kèm (tab Cấu hình email); nếu rỗng thì dùng biến môi trường. */
+/** Danh sách email do app gửi kèm (tab Cấu hình — bắt buộc). */
 function parseRecipientEmailsFromBody(body) {
   if (!body || typeof body !== 'object') return []
   const raw = /** @type {Record<string, unknown>} */ (body).recipientEmails
@@ -339,8 +314,17 @@ export const handler = async (event) => {
     const subjectSubmitter = `[Checklist] Kết quả — ${data.checklistTitle} — ${data.submitterName}`
 
     const toSubmitter = String(data.submitterEmail || '').trim()
-    const fromClient = parseRecipientEmailsFromBody(body)
-    const managers = fromClient.length > 0 ? fromClient : collectNotificationRecipients()
+    const managers = parseRecipientEmailsFromBody(body)
+    if (managers.length === 0) {
+      return {
+        statusCode: 400,
+        headers,
+        body: JSON.stringify({
+          error:
+            'Thiếu recipientEmails. Ứng dụng phải gửi danh sách từ Manager → Cấu hình email (lãnh đạo + nhân sự trùng tên người nộp). Không đọc LEADER_EMAILS / .env cho danh sách này.',
+        }),
+      }
+    }
     const threshold = Number(process.env.ERROR_THRESHOLD ?? '5')
     const totalErrors = Number(data.totalErrors ?? 0)
     const submitterLower = toSubmitter.toLowerCase()

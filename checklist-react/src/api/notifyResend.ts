@@ -50,12 +50,12 @@ function notifyUrl(): string | null {
 }
 
 const SKIP_NOTIFY_HELP =
-  'Local: (1) `netlify dev` → http://localhost:8888; (2) `VITE_NETLIFY_DEV_PROXY=1` + chạy functions; (3) `VITE_NOTIFY_FUNCTION_URL`. Trên Netlify/.env gốc: SMTP_* hoặc RESEND_API_KEY + RESEND_FROM. Tuỳ chọn: NOTIFY_SHARED_SECRET (= VITE_NOTIFY_SHARED_SECRET).'
+  'Local: (1) `netlify dev` → http://localhost:8888; (2) `VITE_NETLIFY_DEV_PROXY=1` + chạy functions; (3) `VITE_NOTIFY_FUNCTION_URL`. Netlify/.env: SMTP_* hoặc RESEND (không dùng LEADER_EMAILS cho danh sách nhận). Tuỳ chọn: NOTIFY_SHARED_SECRET.'
 
-/** Gọi Netlify Function gửi mail (SMTP/Resend). `recipientEmails` từ tab Cấu hình; nếu không gửi thì server dùng LEADER_EMAILS/HR_EMAILS/MANAGER_EMAILS trên Netlify. */
+/** Gọi Netlify Function gửi mail (SMTP/Resend). `recipientEmails` bắt buộc — do app tính từ tab Cấu hình (lãnh đạo + nhân sự trùng tên người nộp). */
 export async function requestChecklistEmailNotification(
   notification: ChecklistEmailNotificationPayload,
-  options?: { recipientEmails?: string[] },
+  options: { recipientEmails: string[] },
 ): Promise<void> {
   const url = notifyUrl()
   if (!url) {
@@ -77,14 +77,13 @@ export async function requestChecklistEmailNotification(
 
   let res: Response
   try {
-    const body: Record<string, unknown> = { notification }
-    if (options?.recipientEmails?.length) {
-      body.recipientEmails = options.recipientEmails
+    if (!options.recipientEmails.length) {
+      throw new Error('Thiếu recipientEmails (lỗi nội bộ).')
     }
     res = await fetch(url, {
       method: 'POST',
       headers,
-      body: JSON.stringify(body),
+      body: JSON.stringify({ notification, recipientEmails: options.recipientEmails }),
     })
   } catch (e) {
     const m = e instanceof Error ? e.message : String(e)
