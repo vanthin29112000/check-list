@@ -1,74 +1,69 @@
-import { jsPDF } from 'jspdf'
 import type { HistoryRow } from './types'
 
-function arrayBufferToBase64(buffer: ArrayBuffer): string {
-  const bytes = new Uint8Array(buffer)
-  let binary = ''
-  for (let i = 0; i < bytes.byteLength; i++) {
-    binary += String.fromCharCode(bytes[i]!)
-  }
-  return btoa(binary)
-}
+const PDF_PATH = '/.netlify/functions/build-checklist-pdf'
 
-async function fetchFontBase64(relativePath: string): Promise<string> {
-  const res = await fetch(relativePath)
-  if (!res.ok) {
-    throw new Error(`Không tải được font (${relativePath}): HTTP ${res.status}`)
-  }
-  return arrayBufferToBase64(await res.arrayBuffer())
-}
+function pdfFunctionUrl(): string | null {
+  if (typeof window === 'undefined') return null
+  const origin = window.location.origin
+  const h = window.location.hostname
+  const isLocal = h === 'localhost' || h === '127.0.0.1'
+  const port = window.location.port
 
-/** Helvetica mặc định của jsPDF không hỗ trợ Unicode → tiếng Việt bị lỗi; nhúng Noto Sans từ public/fonts. */
-async function embedVietnameseFonts(doc: jsPDF): Promise<void> {
-  const root = import.meta.env.BASE_URL || '/'
-  const reg = await fetchFontBase64(`${root}fonts/NotoSans-Regular.ttf`)
-  const bold = await fetchFontBase64(`${root}fonts/NotoSans-Bold.ttf`)
-  doc.addFileToVFS('NotoSans-Regular.ttf', reg)
-  doc.addFileToVFS('NotoSans-Bold.ttf', bold)
-  doc.addFont('NotoSans-Regular.ttf', 'NotoSans', 'normal', undefined, 'Identity-H')
-  doc.addFont('NotoSans-Bold.ttf', 'NotoSans', 'bold', undefined, 'Identity-H')
+  if (isLocal) {
+    if (port === '8888' || import.meta.env.VITE_NETLIFY_DEV_PROXY === '1') {
+      return `${origin}${PDF_PATH}`
+    }
+    const explicit = import.meta.env.VITE_NOTIFY_FUNCTION_URL?.trim()
+    if (explicit) {
+      try {
+        const u = new URL(explicit)
+        return `${u.origin}${PDF_PATH}`
+      } catch {
+        return `${origin}${PDF_PATH}`
+      }
+    }
+    return null
+  }
+  return `${origin}${PDF_PATH}`
 }
 
 export async function downloadChecklistPdf(row: HistoryRow): Promise<void> {
-  const doc = new jsPDF({ unit: 'pt', format: 'a4' })
-  await embedVietnameseFonts(doc)
+  const url = pdfFunctionUrl()
+  if (!url) {
+    throw new Error(
+      'Chưa tạo được PDF chuẩn server: hãy chạy qua Netlify (`npm run dev`), hoặc bật `VITE_NETLIFY_DEV_PROXY=1`, hoặc cấu hình `VITE_NOTIFY_FUNCTION_URL`.',
+    )
+  }
 
-  const margin = 40
-  let y = margin
-  const line = (text: string, size = 10, bold = false) => {
-    doc.setFontSize(size)
-    doc.setFont('NotoSans', bold ? 'bold' : 'normal')
-    const lines = doc.splitTextToSize(text, doc.internal.pageSize.getWidth() - margin * 2)
-    for (const ln of lines) {
-      if (y > doc.internal.pageSize.getHeight() - margin) {
-        doc.addPage()
-        y = margin
-      }
-      doc.text(ln, margin, y)
-      y += size + 4
+  const secret = import.meta.env.VITE_NOTIFY_SHARED_SECRET?.trim()
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' }
+  if (secret) headers.Authorization = `Bearer ${secret}`
+
+  const res = await fetch(url, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ result: row }),
+  })
+  if (!res.ok) {
+    const raw = (await res.text().catch(() => '')).trim()
+    let msg = raw || `HTTP ${res.status}`
+    try {
+      const j = JSON.parse(raw) as { error?: string }
+      if (typeof j.error === 'string' && j.error.trim()) msg = j.error.trim()
+    } catch {
+      /* ignore */
     }
+    throw new Error(`Xuất PDF thất bại: ${msg}`)
   }
 
-  line('PHIẾU CHECKLIST (xuất từ ứng dụng)', 12, true)
-  y += 6
-  if (row.clDocSerial != null && row.clDocSerial > 0) {
-    line(`Số: ${String(row.clDocSerial).padStart(3, '0')}/CL-CNTTDL`, 10, true)
-    y += 4
-  }
-  line(`Tiêu đề: ${row.checklistTitle}`, 10, true)
-  line(`Người gửi: ${row.submitterName} <${row.submitterEmail}>`, 10)
-  line(`Ngày kiểm tra: ${row.checkDate}`, 10)
-  line(`Ngày giờ gửi: ${row.createdAtUtc}`, 10)
-  line(`Tổng mục không đạt: ${row.totalErrors}`, 10, true)
-  line(`Đã duyệt: ${row.isApproved ? 'Có' : 'Chưa'}`, 10)
-  y += 10
-  line('Chi tiết:', 11, true)
-  y += 4
-  for (const d of row.details) {
-    const st = d.passed ? 'Đạt' : 'Không đạt'
-    line(`• [${d.groupTitle}] ${d.label} — ${st}`, 9)
-    if (d.note) line(`  Ghi chú: ${d.note}`, 8)
-  }
-
-  doc.save(`checklist-${row.checklistKey}-${row.checkDate.replace(/-/g, '')}.pdf`)
+  const blob = await res.blob()
+  const fileName = `checklist-${row.checklistKey}-${row.checkDate.replace(/-/g, '')}.pdf`
+  const a = document.createElement('a')
+  const href = URL.createObjectURL(blob)
+  a.href = href
+  a.download = fileName
+  document.body.appendChild(a)
+  a.click()
+  a.remove()
+  URL.revokeObjectURL(href)
 }
