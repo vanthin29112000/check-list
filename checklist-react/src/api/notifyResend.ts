@@ -50,7 +50,7 @@ function notifyUrl(): string | null {
 }
 
 const SKIP_NOTIFY_HELP =
-  'Local: (1) `netlify dev` → http://localhost:8888; (2) `VITE_NETLIFY_DEV_PROXY=1` + chạy functions; (3) `VITE_NOTIFY_FUNCTION_URL`. Function cần SMTP_* trong `.env` gốc repo hoặc Netlify. Tuỳ chọn: NOTIFY_SHARED_SECRET (cùng giá trị với VITE_NOTIFY_SHARED_SECRET).'
+  'Local: (1) `netlify dev` → http://localhost:8888; (2) `VITE_NETLIFY_DEV_PROXY=1` + chạy functions; (3) `VITE_NOTIFY_FUNCTION_URL`. Trên Netlify/.env gốc: SMTP_* hoặc RESEND_API_KEY + RESEND_FROM. Tuỳ chọn: NOTIFY_SHARED_SECRET (= VITE_NOTIFY_SHARED_SECRET).'
 
 /** Gọi Netlify Function gửi mail (SMTP). Server không dùng Firebase — payload do app gửi kèm. */
 export async function requestChecklistEmailNotification(

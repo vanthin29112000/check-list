@@ -111,6 +111,16 @@ function buildLeaderEmailText(data, approveUrl, dashboardUrl) {
   ].join('\n')
 }
 
+function hasSmtpConfig() {
+  return Boolean(
+    process.env.SMTP_HOST?.trim() && process.env.SMTP_USER?.trim() && process.env.SMTP_PASS?.trim(),
+  )
+}
+
+function hasResendConfig() {
+  return Boolean(process.env.RESEND_API_KEY?.trim())
+}
+
 function createSmtpTransport() {
   const host = process.env.SMTP_HOST?.trim()
   const user = process.env.SMTP_USER?.trim()
@@ -131,6 +141,43 @@ function createSmtpTransport() {
     secure,
     auth: { user, pass },
   })
+}
+
+/**
+ * @param {string} from
+ * @param {string} to
+ * @param {string} subject
+ * @param {string} text
+ * @param {{ filename: string, content: string }[] | null} attachments — content đã là base64
+ */
+async function sendViaResend(from, to, subject, text, attachments) {
+  const key = process.env.RESEND_API_KEY?.trim()
+  if (!key) throw new Error('Thiếu RESEND_API_KEY')
+  /** @type {Record<string, unknown>} */
+  const payload = {
+    from,
+    to: [to],
+    subject,
+    text,
+  }
+  if (attachments?.length) {
+    payload.attachments = attachments.map((a) => ({
+      filename: a.filename,
+      content: String(a.content),
+    }))
+  }
+  const res = await fetch('https://api.resend.com/emails', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${key}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(payload),
+  })
+  const raw = await res.text()
+  if (!res.ok) {
+    throw new Error(`Resend ${res.status}: ${raw || res.statusText}`)
+  }
 }
 
 /**
@@ -225,12 +272,28 @@ export const handler = async (event) => {
       return { statusCode: 400, headers, body: JSON.stringify({ error: m }) }
     }
 
-    let transporter
-    try {
-      transporter = createSmtpTransport()
-    } catch (cfgErr) {
-      const msg = cfgErr instanceof Error ? cfgErr.message : String(cfgErr)
-      return { statusCode: 501, headers, body: JSON.stringify({ error: msg }) }
+    const useSmtp = hasSmtpConfig()
+    const useResend = !useSmtp && hasResendConfig()
+    if (!useSmtp && !useResend) {
+      return {
+        statusCode: 501,
+        headers,
+        body: JSON.stringify({
+          error:
+            'Thiếu cấu hình gửi mail: đặt (1) SMTP_HOST + SMTP_USER + SMTP_PASS hoặc (2) RESEND_API_KEY và RESEND_FROM (ví dụ Checklist <onboarding@resend.dev>) trên .env gốc repo / Netlify.',
+        }),
+      }
+    }
+
+    /** @type {import('nodemailer').Transporter | null} */
+    let transporter = null
+    if (useSmtp) {
+      try {
+        transporter = createSmtpTransport()
+      } catch (cfgErr) {
+        const msg = cfgErr instanceof Error ? cfgErr.message : String(cfgErr)
+        return { statusCode: 501, headers, body: JSON.stringify({ error: msg }) }
+      }
     }
 
     const publicBase = (process.env.PUBLIC_BASE_URL || '').replace(/\/$/, '')
@@ -246,8 +309,9 @@ export const handler = async (event) => {
     }
 
     const smtpUser = process.env.SMTP_USER?.trim() || ''
-    const fromHeader =
-      process.env.SMTP_FROM?.trim() || (smtpUser ? `Checklist <${smtpUser}>` : 'Checklist')
+    const fromHeader = useSmtp
+      ? process.env.SMTP_FROM?.trim() || (smtpUser ? `Checklist <${smtpUser}>` : 'Checklist')
+      : process.env.RESEND_FROM?.trim() || 'Checklist <onboarding@resend.dev>'
 
     const approveUrl = `${publicBase}/approve?token=${encodeURIComponent(data.approvalToken)}`
     const dashboardUrl = `${publicBase}/dashboard`
@@ -282,6 +346,10 @@ export const handler = async (event) => {
     const leaderMailText = textLeader + pdfErrorNote
 
     const sendOne = async (to, subj, txt, attachments = pdfAttachments) => {
+      if (useResend) {
+        await sendViaResend(fromHeader, to, subj, txt, attachments)
+        return
+      }
       /** @type {import('nodemailer/lib/mailer').Options} */
       const mail = {
         from: fromHeader,
@@ -289,7 +357,7 @@ export const handler = async (event) => {
         subject: subj,
         text: txt,
       }
-      if (attachments?.length) {
+      if (attachments?.length && transporter) {
         mail.attachments = attachments.map((a) => ({
           filename: a.filename,
           content: Buffer.from(String(a.content), 'base64'),
@@ -315,14 +383,18 @@ export const handler = async (event) => {
         await sendOne(mgr, subj, bodyWithAlert)
       } catch (e) {
         // eslint-disable-next-line no-console
-        console.error('SMTP manager mail failed', mgr, e)
+        console.error('manager mail failed', mgr, e)
       }
     }
 
     return {
       statusCode: 200,
       headers,
-      body: JSON.stringify({ ok: true, pdfAttached: Boolean(pdfAttachments?.length), transport: 'smtp' }),
+      body: JSON.stringify({
+        ok: true,
+        pdfAttached: Boolean(pdfAttachments?.length),
+        transport: useSmtp ? 'smtp' : 'resend',
+      }),
     }
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e)
