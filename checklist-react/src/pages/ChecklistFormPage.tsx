@@ -1,7 +1,25 @@
 ﻿import { useEffect, useMemo, useRef, useState } from 'react'
-import { Alert, Button, Card, Col, Collapse, Grid, Input, Modal, Radio, Row, Select, Space, Table, Typography, notification } from 'antd'
+import {
+  Alert,
+  Button,
+  Card,
+  Col,
+  Collapse,
+  Grid,
+  Input,
+  Modal,
+  Radio,
+  Row,
+  Select,
+  Space,
+  Spin,
+  Table,
+  Typography,
+  notification,
+} from 'antd'
 import type { ColumnsType } from 'antd/es/table'
 import dayjs, { Dayjs } from 'dayjs'
+import { useNavigate } from 'react-router-dom'
 import { fetchCompletionStatus, fetchDefinitions, submitChecklist } from '../api/client'
 import type { ChecklistDefinition, ChecklistItemDef } from '../api/types'
 
@@ -21,6 +39,7 @@ function checklistDropdownLabel(key: string, fallbackTitle: string): string {
 }
 
 export default function ChecklistFormPage() {
+  const navigate = useNavigate()
   const { md } = Grid.useBreakpoint()
   const isMobile = !md
 
@@ -38,6 +57,8 @@ export default function ChecklistFormPage() {
   const [hasTriedSubmit, setHasTriedSubmit] = useState(false)
 
   const [busy, setBusy] = useState(false)
+  const [submitOverlayOpen, setSubmitOverlayOpen] = useState(false)
+  const [submitPhaseText, setSubmitPhaseText] = useState('Đang xử lý...')
   const [notiApi, contextHolder] = notification.useNotification()
   const hydratedDraftRef = useRef(false)
 
@@ -369,29 +390,33 @@ export default function ChecklistFormPage() {
     }
 
     setBusy(true)
+    setSubmitOverlayOpen(true)
+    setSubmitPhaseText('Đang lưu checklist...')
     try {
-      const res = await submitChecklist(payload.body)
+      const res = await submitChecklist(payload.body, (phase) => {
+        setSubmitPhaseText(phase === 'save' ? 'Đang lưu checklist...' : 'Đang gửi email thông báo...')
+      })
       const sentAt = dayjs().format('DD/MM/YYYY HH:mm')
       try {
         await reloadCompletionStatus()
       } catch {
         // Bỏ qua lỗi reload trạng thái để không ảnh hưởng kết quả submit thành công.
       }
-      notiApi.success({
-        message: 'Gửi checklist thành công',
-        description: `Tổng lỗi: ${res.totalErrors} • Thời gian: ${sentAt}`,
-        placement: 'topRight',
-        duration: 5,
-      })
       if (checklistKey) {
         localStorage.removeItem(draftStorageKey(checklistKey, checkDate))
       }
-      // Reset trạng thái form sau khi gửi thành công để tránh submit trùng.
       setPassedByKey({})
       setSubPassedByKey({})
       setNoteByKey({})
       setInvalidItemKey(null)
       setHasTriedSubmit(false)
+      notiApi.success({
+        message: 'Gửi checklist thành công',
+        description: `Đã gửi email • Tổng lỗi: ${res.totalErrors} • ${sentAt}`,
+        placement: 'topRight',
+        duration: 4,
+      })
+      navigate('/dashboard')
     } catch (e: unknown) {
       const ax = e as { response?: { data?: { error?: string } }; message?: string }
       const msg = ax.response?.data?.error ?? ax.message ?? String(e)
@@ -403,6 +428,7 @@ export default function ChecklistFormPage() {
       })
     } finally {
       setBusy(false)
+      setSubmitOverlayOpen(false)
     }
   }
 
@@ -431,7 +457,7 @@ export default function ChecklistFormPage() {
       ),
       okText: 'Xác nhận gửi',
       cancelText: 'Kiểm tra lại',
-      onOk: () => void submitFinal(),
+      onOk: () => submitFinal(),
     })
   }
 
@@ -506,6 +532,23 @@ export default function ChecklistFormPage() {
 
   return (
     <Space direction="vertical" size="middle" style={{ width: '100%' }}>
+      <Modal
+        open={submitOverlayOpen}
+        footer={null}
+        closable={false}
+        maskClosable={false}
+        centered
+        zIndex={2000}
+        styles={{ body: { padding: '28px 32px', textAlign: 'center' } }}
+      >
+        <Spin size="large" />
+        <Typography.Paragraph style={{ marginTop: 20, marginBottom: 0 }} strong>
+          {submitPhaseText}
+        </Typography.Paragraph>
+        <Typography.Text type="secondary" style={{ display: 'block', marginTop: 8, fontSize: 13 }}>
+          Vui lòng đợi, không đóng trình duyệt.
+        </Typography.Text>
+      </Modal>
       {contextHolder}
       <Card title="Thông tin phiên checklist" styles={{ body: { background: '#fafafa' } }}>
         <Row gutter={[12, 12]}>
@@ -785,7 +828,7 @@ function resolveAssignee(checklistKey: string, checkDate: Dayjs): { name: string
   // Thứ 2-3: Chề Long Bảo, Thứ 4-5: Phạm Thanh Tuấn, Thứ 6-7: Phan Văn Thìn
   const day = checkDate.day() // 0: CN, 1: T2, ... 6: T7
   if (day === 1 || day === 2) {
-    return { name: 'Chề Long Bảo', email: 'che.long.bao@demo.local' }
+    return { name: 'Chề Long Bảo', email: 'clbao@ktxhcm.edu.vn' }
   }
   if (day === 3 || day === 4) {
     return { name: 'Phạm Thanh Tuấn', email: 'pham.thanh.tuan@demo.local' }

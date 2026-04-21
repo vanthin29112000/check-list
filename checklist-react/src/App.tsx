@@ -44,23 +44,32 @@ export default function App() {
   }, [role])
 
   useEffect(() => {
+    let cancelled = false
     void (async () => {
-      const [completion, dashboard] = await Promise.all([
-        fetchCompletionStatus({ date: dayjs().format('YYYY-MM-DD') }),
-        fetchDashboard({}),
-      ])
-      const missingToday = completion.items.filter((x) => !x.isCompletedToday).length
-      setStatus({
-        missingToday,
-        pendingApprovals: dashboard.overview.pendingApprovalCount,
-      })
+      try {
+        const [completion, dashboard] = await Promise.all([
+          fetchCompletionStatus({ date: dayjs().format('YYYY-MM-DD') }),
+          fetchDashboard({}),
+        ])
+        if (cancelled) return
+        const missingToday = completion.items.filter((x) => !x.isCompletedToday).length
+        setStatus({
+          missingToday,
+          pendingApprovals: dashboard.overview.pendingApprovalCount,
+        })
+      } catch {
+        /* ignore */
+      }
     })()
-  }, [])
+    return () => {
+      cancelled = true
+    }
+  }, [loc.pathname])
 
   useEffect(() => {
     if (role !== 'staff') return
     if (status.missingToday <= 0) return
-    if (loc.pathname === '/') return
+    if (loc.pathname === '/' || loc.pathname === '/dashboard') return
     if (redirectedRef.current) return
     redirectedRef.current = true
     void navigate('/', { replace: true })

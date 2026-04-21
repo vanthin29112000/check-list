@@ -128,7 +128,10 @@ export async function fetchDefinitions(): Promise<DefinitionsResponse> {
   }
 }
 
-export async function submitChecklist(body: SubmitChecklistRequest): Promise<SubmitChecklistResponse> {
+export async function submitChecklist(
+  body: SubmitChecklistRequest,
+  onProgress?: (phase: 'save' | 'email') => void,
+): Promise<SubmitChecklistResponse> {
   const def = findChecklist(body.checklistKey)
   if (!def) throw new Error(`Checklist không tồn tại: ${body.checklistKey}`)
 
@@ -214,6 +217,7 @@ export async function submitChecklist(body: SubmitChecklistRequest): Promise<Sub
   const uniqId = uniqDocId(def.key, body.submitterEmail, checkDateStr)
   const db = getDb()
 
+  onProgress?.('save')
   try {
     await runTransaction(db, async (tx) => {
       const uref = doc(db, UNIQ, uniqId)
@@ -234,12 +238,15 @@ export async function submitChecklist(body: SubmitChecklistRequest): Promise<Sub
   }
 
   const approvalLink = buildApprovalLink(approvalToken)
-  void requestChecklistEmailNotification(resultId).catch((err) => {
-    if (import.meta.env.DEV) {
-      // eslint-disable-next-line no-console
-      console.error('[email] Gửi thông báo thất bại (submit vẫn thành công):', err)
-    }
-  })
+  onProgress?.('email')
+  try {
+    await requestChecklistEmailNotification(resultId)
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e)
+    throw new Error(
+      `Checklist đã được lưu nhưng gửi email thất bại: ${msg} Vào Lịch sử để gửi lại email; không nộp lại cùng checklist trong ngày.`,
+    )
+  }
   return {
     resultId,
     totalErrors,
