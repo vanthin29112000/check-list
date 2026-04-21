@@ -2,6 +2,12 @@
   command = "npm --prefix netlify/functions ci && npm --prefix checklist-react ci && npm --prefix checklist-react run build"
   publish = "checklist-react/dist"
 
+# React Router: /approve, /dashboard, … không phải file tĩnh — trả index.html để app xử lý (tránh 404 Netlify).
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200
+
 [functions]
   directory = "netlify/functions"
   # Đóng gói file .ttf cùng function (đọc qua fs lúc chạy, không qua import — bundler bỏ qua nếu không khai báo)
