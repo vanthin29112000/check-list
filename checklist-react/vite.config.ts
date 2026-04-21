@@ -19,8 +19,9 @@ export default defineConfig(({ mode }) => {
   return {
     plugins: [react()],
     server: {
-      // Netlify Dev (và một số tool) probe cổng 5173 — cần lắng nghe rõ ràng, không đổi cổng im lặng
-      host: true,
+      // Netlify Dev trên Windows hay probe 127.0.0.1 — `host: true` có thể chỉ bám IPv6 / 0.0.0.0
+      // và gây ETIMEDOUT khi kết nối localhost:5173.
+      host: '127.0.0.1',
       port: 5173,
       strictPort: true,
       ...(proxyNetlify

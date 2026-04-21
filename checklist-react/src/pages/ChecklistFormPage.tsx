@@ -11,6 +11,15 @@ function subStateKey(itemKey: string, subKey: string): string {
   return `${itemKey}::${subKey}`
 }
 
+/** Nhãn hiển thị trong dropdown chọn checklist (ngắn gọn, dễ đọc). */
+function checklistDropdownLabel(key: string, fallbackTitle: string): string {
+  const k = key.toLowerCase()
+  if (k === 'cong-khu-a') return 'Kiểm soát ra vào khu A'
+  if (k === 'cong-khu-b') return 'Kiểm soát ra vào khu B'
+  if (k === 'phong-server') return 'Phòng máy chủ'
+  return fallbackTitle
+}
+
 export default function ChecklistFormPage() {
   const { md } = Grid.useBreakpoint()
   const isMobile = !md
@@ -86,9 +95,10 @@ export default function ChecklistFormPage() {
       catalog.map((c) => {
         const completedCount = completedTodayByKey[c.key] ?? 0
         const isDone = completedCount > 0
+        const name = checklistDropdownLabel(c.key, c.title)
         return {
           value: c.key,
-          label: isDone ? `${c.title} (đã làm hôm nay)` : c.title,
+          label: isDone ? `${name} (đã làm hôm nay)` : name,
           disabled: isDone,
         }
       }),
