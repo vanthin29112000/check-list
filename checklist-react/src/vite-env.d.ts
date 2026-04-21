@@ -11,6 +11,8 @@ interface ImportMetaEnv {
   readonly VITE_NOTIFY_FUNCTION_URL?: string
   /** Đặt `1` khi chạy `netlify dev` (functions :8888) và muốn Vite proxy `/.netlify/functions` */
   readonly VITE_NETLIFY_DEV_PROXY?: string
+  /** Trùng NOTIFY_SHARED_SECRET trên Netlify / .env gốc nếu bật bảo vệ function gửi mail (lộ trong bundle). */
+  readonly VITE_NOTIFY_SHARED_SECRET?: string
 }
 
 interface ImportMeta {

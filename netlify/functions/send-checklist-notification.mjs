@@ -1,24 +1,5 @@
-import { initializeApp, cert, getApps } from 'firebase-admin/app'
-import { getFirestore } from 'firebase-admin/firestore'
-import { getAuth } from 'firebase-admin/auth'
 import nodemailer from 'nodemailer'
 import { buildChecklistPdfBase64 } from './buildChecklistPdf.mjs'
-
-function initAdmin() {
-  if (getApps().length > 0) return
-  const raw = process.env.FIREBASE_SERVICE_ACCOUNT_JSON?.trim()
-  if (!raw) {
-    throw new Error(
-      'Thiếu FIREBASE_SERVICE_ACCOUNT_JSON. Dán JSON service account (một dòng) vào file .env ở gốc repo (local) hoặc Netlify → Environment variables (production). Firebase Console → Project settings → Service accounts → Generate new private key.',
-    )
-  }
-  try {
-    initializeApp({ credential: cert(JSON.parse(raw)) })
-  } catch (e) {
-    const m = e instanceof Error ? e.message : String(e)
-    throw new Error(`FIREBASE_SERVICE_ACCOUNT_JSON không hợp lệ (JSON lỗi): ${m}`)
-  }
-}
 
 function parseOrigins() {
   return (process.env.CORS_ORIGINS || '')
@@ -48,7 +29,6 @@ function splitEmails(raw) {
     .filter(Boolean)
 }
 
-/** Hợp nhất LEADER_EMAILS + HR_EMAILS + MANAGER_EMAILS (legacy), bỏ trùng (không phân biệt hoa thường). */
 function collectNotificationRecipients() {
   const raw = [
     ...splitEmails(process.env.LEADER_EMAILS),
@@ -72,11 +52,15 @@ function formatDdMmYyyy(ymd) {
   return `${String(d).padStart(2, '0')}/${String(m).padStart(2, '0')}/${y}`
 }
 
-/** Chuẩn hóa dữ liệu Firestore → object thuần cho PDF (Timestamp / plain seconds). */
+/** Chuẩn hóa payload JSON từ client → object cho PDF (Date / Timestamp-like / ISO string). */
 function normalizeDocForPdf(data) {
   const toDate = (v) => {
     if (v == null) return v
     if (v instanceof Date) return v
+    if (typeof v === 'string' && v.length > 0) {
+      const d = new Date(v)
+      if (!Number.isNaN(d.getTime())) return d
+    }
     if (typeof v.toDate === 'function') return v.toDate()
     if (typeof v._seconds === 'number') return new Date(v._seconds * 1000)
     if (typeof v.seconds === 'number') return new Date(v.seconds * 1000 + (v.nanoseconds || 0) / 1e6)
@@ -90,7 +74,6 @@ function normalizeDocForPdf(data) {
   }
 }
 
-/** Nội dung kết quả checklist (dùng cho cả người check và lãnh đạo). */
 function buildResultSummaryText(data) {
   const details = Array.isArray(data.details) ? data.details : []
   const failures = details.filter((x) => !x.passed)
@@ -112,12 +95,10 @@ function buildResultSummaryText(data) {
   return lines.join('\n')
 }
 
-/** Email người nộp: chỉ kết quả (không kèm link duyệt / dashboard). */
 function buildSubmitterEmailText(data) {
   return buildResultSummaryText(data)
 }
 
-/** Email lãnh đạo: kết quả + link duyệt + link dashboard. */
 function buildLeaderEmailText(data, approveUrl, dashboardUrl) {
   return [
     buildResultSummaryText(data),
@@ -152,6 +133,55 @@ function createSmtpTransport() {
   })
 }
 
+/**
+ * Đọc payload do app gửi (đã lưu Firestore phía client). Không dùng Firebase Admin trên server.
+ * @param {unknown} body — JSON.parse của request body
+ */
+function parseNotificationPayload(body) {
+  const n = body && typeof body === 'object' ? /** @type {Record<string, unknown>} */ (body).notification : null
+  if (!n || typeof n !== 'object') {
+    throw new Error('Thiếu trường notification (object) trong body.')
+  }
+  const o = /** @type {Record<string, unknown>} */ (n)
+  const checklistKey = String(o.checklistKey ?? '').trim()
+  const checklistTitle = String(o.checklistTitle ?? '').trim()
+  const submitterName = String(o.submitterName ?? '').trim()
+  const submitterEmail = String(o.submitterEmail ?? '').trim()
+  const checkDate = String(o.checkDate ?? '').trim()
+  const approvalToken = String(o.approvalToken ?? '').trim()
+  if (!checklistKey) throw new Error('notification.checklistKey không hợp lệ.')
+  if (!checklistTitle) throw new Error('notification.checklistTitle không hợp lệ.')
+  if (!submitterName) throw new Error('notification.submitterName không hợp lệ.')
+  if (!approvalToken) throw new Error('notification.approvalToken không hợp lệ.')
+  if (!Array.isArray(o.details)) throw new Error('notification.details phải là mảng.')
+  const details = o.details.map((row, i) => {
+    if (!row || typeof row !== 'object') throw new Error(`notification.details[${i}] không hợp lệ.`)
+    const r = /** @type {Record<string, unknown>} */ (row)
+    return {
+      itemKey: String(r.itemKey ?? ''),
+      groupTitle: String(r.groupTitle ?? ''),
+      label: String(r.label ?? ''),
+      standard: String(r.standard ?? ''),
+      passed: Boolean(r.passed),
+      note: r.note == null || r.note === '' ? null : String(r.note),
+    }
+  })
+  return {
+    checklistKey,
+    checklistTitle,
+    submitterName,
+    submitterEmail,
+    checkDate,
+    totalErrors: Number(o.totalErrors ?? 0),
+    createdAtUtc: o.createdAtUtc,
+    approvalToken,
+    isApproved: Boolean(o.isApproved),
+    approvedAtUtc: o.approvedAtUtc ?? null,
+    details,
+    clDocSerial: Number(o.clDocSerial ?? 0),
+  }
+}
+
 export const handler = async (event) => {
   const origin = event.headers.origin || event.headers.Origin || ''
   const headers = corsHeaders(origin)
@@ -164,18 +194,21 @@ export const handler = async (event) => {
   }
 
   try {
-    initAdmin()
-
-    const authHeader = event.headers.authorization || event.headers.Authorization
-    const bearer =
-      typeof authHeader === 'string' && authHeader.startsWith('Bearer ')
-        ? authHeader.slice(7).trim()
-        : ''
-    if (!bearer) {
-      return { statusCode: 401, headers, body: JSON.stringify({ error: 'Thiếu Authorization Bearer (Firebase ID token).' }) }
+    const requiredSecret = process.env.NOTIFY_SHARED_SECRET?.trim()
+    if (requiredSecret) {
+      const authHeader = event.headers.authorization || event.headers.Authorization
+      const bearer =
+        typeof authHeader === 'string' && authHeader.startsWith('Bearer ')
+          ? authHeader.slice(7).trim()
+          : ''
+      if (bearer !== requiredSecret) {
+        return {
+          statusCode: 401,
+          headers,
+          body: JSON.stringify({ error: 'Sai hoặc thiếu NOTIFY_SHARED_SECRET (Authorization: Bearer …).' }),
+        }
+      }
     }
-
-    await getAuth().verifyIdToken(bearer)
 
     let body
     try {
@@ -184,19 +217,12 @@ export const handler = async (event) => {
       return { statusCode: 400, headers, body: JSON.stringify({ error: 'JSON không hợp lệ' }) }
     }
 
-    const resultId = typeof body.resultId === 'string' ? body.resultId.trim() : ''
-    if (!resultId) {
-      return { statusCode: 400, headers, body: JSON.stringify({ error: 'Thiếu resultId' }) }
-    }
-
-    const snap = await getFirestore().collection('checklistResults').doc(resultId).get()
-    if (!snap.exists) {
-      return { statusCode: 404, headers, body: JSON.stringify({ error: 'Không tìm thấy checklist' }) }
-    }
-
-    const data = snap.data()
-    if (!data) {
-      return { statusCode: 404, headers, body: JSON.stringify({ error: 'Không tìm thấy checklist' }) }
+    let data
+    try {
+      data = parseNotificationPayload(body)
+    } catch (parseErr) {
+      const m = parseErr instanceof Error ? parseErr.message : String(parseErr)
+      return { statusCode: 400, headers, body: JSON.stringify({ error: m }) }
     }
 
     let transporter
@@ -223,8 +249,7 @@ export const handler = async (event) => {
     const fromHeader =
       process.env.SMTP_FROM?.trim() || (smtpUser ? `Checklist <${smtpUser}>` : 'Checklist')
 
-    const approvalToken = String(data.approvalToken || '')
-    const approveUrl = `${publicBase}/approve?token=${encodeURIComponent(approvalToken)}`
+    const approveUrl = `${publicBase}/approve?token=${encodeURIComponent(data.approvalToken)}`
     const dashboardUrl = `${publicBase}/dashboard`
     const textSubmitter = buildSubmitterEmailText(data)
     const textLeader = buildLeaderEmailText(data, approveUrl, dashboardUrl)
@@ -303,10 +328,6 @@ export const handler = async (event) => {
     const msg = e instanceof Error ? e.message : String(e)
     // eslint-disable-next-line no-console
     console.error('send-checklist-notification', e)
-    let detail = msg
-    if (/insufficient permissions|permission.?denied|PERMISSION_DENIED/i.test(msg)) {
-      detail = `${msg} — Thường do Firestore (Admin SDK): (1) FIREBASE_SERVICE_ACCOUNT_JSON phải là private key của đúng Firebase project mà app đang dùng (cùng project_id với VITE_FIREBASE_PROJECT_ID). (2) Google Cloud Console → IAM → tài khoản firebase-adminsdk-… cần quyền truy cập Firestore (thường có sẵn; nếu thiếu thêm vai trò "Cloud Datastore User" hoặc "Firebase Admin"). (3) Tạo lại private key mới nếu key cũ đã thu hồi.`
-    }
-    return { statusCode: 500, headers: corsHeaders(origin), body: JSON.stringify({ error: detail }) }
+    return { statusCode: 500, headers: corsHeaders(origin), body: JSON.stringify({ error: msg }) }
   }
 }

@@ -55,6 +55,22 @@ export interface HistoryDetail {
   note?: string | null
 }
 
+/** Gửi lên Netlify function send-checklist-notification (chỉ SMTP; server không đọc Firestore). */
+export interface ChecklistEmailNotificationPayload {
+  checklistKey: string
+  checklistTitle: string
+  submitterName: string
+  submitterEmail: string
+  checkDate: string
+  totalErrors: number
+  createdAtUtc: string
+  approvalToken: string
+  isApproved: boolean
+  approvedAtUtc: string | null
+  details: HistoryDetail[]
+  clDocSerial: number
+}
+
 export interface HistoryRow {
   id: string
   checklistKey: string

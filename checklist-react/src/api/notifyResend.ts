@@ -1,4 +1,4 @@
-import { getFirebaseAuth } from '../lib/firebase'
+import type { ChecklistEmailNotificationPayload } from './types'
 
 const NOTIFY_PATH = '/.netlify/functions/send-checklist-notification'
 
@@ -15,11 +15,9 @@ function notifyUrl(): string | null {
   const port = window.location.port
 
   if (isLocal) {
-    // `netlify dev`: SPA + functions cùng origin (thường :8888)
     if (port === '8888') {
       return `${origin}${NOTIFY_PATH}`
     }
-    // Chỉ Vite :5173 — proxy sang functions local (netlify dev / functions:serve trên :8888)
     if (import.meta.env.VITE_NETLIFY_DEV_PROXY === '1') {
       return `${origin}${NOTIFY_PATH}`
     }
@@ -52,10 +50,12 @@ function notifyUrl(): string | null {
 }
 
 const SKIP_NOTIFY_HELP =
-  'Local: (1) `VITE_NOTIFY_FUNCTION_URL` (URL function deploy) — Vite proxy cùng origin; (2) `netlify dev` gốc repo → http://localhost:8888; (3) `VITE_NETLIFY_DEV_PROXY=1` + `npm run dev:functions`. Function cần SMTP_* + FIREBASE_SERVICE_ACCOUNT_JSON trong `.env` gốc repo hoặc Netlify.'
+  'Local: (1) `netlify dev` → http://localhost:8888; (2) `VITE_NETLIFY_DEV_PROXY=1` + chạy functions; (3) `VITE_NOTIFY_FUNCTION_URL`. Function cần SMTP_* trong `.env` gốc repo hoặc Netlify. Tuỳ chọn: NOTIFY_SHARED_SECRET (cùng giá trị với VITE_NOTIFY_SHARED_SECRET).'
 
-/** Gọi Netlify Function gửi mail (SMTP qua Nodemailer). */
-export async function requestChecklistEmailNotification(resultId: string): Promise<void> {
+/** Gọi Netlify Function gửi mail (SMTP). Server không dùng Firebase — payload do app gửi kèm. */
+export async function requestChecklistEmailNotification(
+  notification: ChecklistEmailNotificationPayload,
+): Promise<void> {
   const url = notifyUrl()
   if (!url) {
     if (import.meta.env.DEV && typeof window !== 'undefined') {
@@ -68,18 +68,18 @@ export async function requestChecklistEmailNotification(resultId: string): Promi
     throw new Error(`Chưa gửi được mail: chưa có URL function. ${SKIP_NOTIFY_HELP}`)
   }
 
-  const idToken = await getFirebaseAuth().currentUser?.getIdToken()
-  if (!idToken) throw new Error('Chưa đăng nhập Firebase, không gửi được thông báo email.')
+  const secret = import.meta.env.VITE_NOTIFY_SHARED_SECRET?.trim()
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' }
+  if (secret) {
+    headers.Authorization = `Bearer ${secret}`
+  }
 
   let res: Response
   try {
     res = await fetch(url, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${idToken}`,
-      },
-      body: JSON.stringify({ resultId }),
+      headers,
+      body: JSON.stringify({ notification }),
     })
   } catch (e) {
     const m = e instanceof Error ? e.message : String(e)

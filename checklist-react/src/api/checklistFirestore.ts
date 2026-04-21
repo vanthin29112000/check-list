@@ -2,6 +2,7 @@ import {
   Timestamp,
   collection,
   doc,
+  getDoc,
   getDocs,
   limit,
   query,
@@ -15,6 +16,7 @@ import type { ChecklistDefinition } from '../catalog/types'
 import { getDb } from '../lib/firebase'
 import { requestChecklistEmailNotification } from './notifyResend'
 import type {
+  ChecklistEmailNotificationPayload,
   CompletionStatusResponse,
   DailyStatusResponse,
   DashboardResponse,
@@ -77,6 +79,30 @@ interface ResultDoc {
   approvedAtUtc: Date | null
   details: ResultDetailDoc[]
   clDocSerial?: number
+}
+
+function resultDocToEmailPayload(r: ResultDoc): ChecklistEmailNotificationPayload {
+  return {
+    checklistKey: r.checklistKey,
+    checklistTitle: r.checklistTitle,
+    submitterName: r.submitterName,
+    submitterEmail: r.submitterEmail,
+    checkDate: r.checkDate,
+    totalErrors: r.totalErrors,
+    createdAtUtc: r.createdAtUtc.toISOString(),
+    approvalToken: r.approvalToken,
+    isApproved: r.isApproved,
+    approvedAtUtc: r.approvedAtUtc ? r.approvedAtUtc.toISOString() : null,
+    details: r.details.map((d) => ({
+      itemKey: d.itemKey,
+      groupTitle: d.groupTitle,
+      label: d.label,
+      standard: d.standard,
+      passed: d.passed,
+      note: d.note ?? null,
+    })),
+    clDocSerial: r.clDocSerial ?? 0,
+  }
 }
 
 function mapDoc(id: string, data: Record<string, unknown>): ResultDoc {
@@ -225,6 +251,7 @@ export async function submitChecklist(
   const db = getDb()
 
   onProgress?.('save')
+  let clDocSerial = 0
   try {
     await runTransaction(db, async (tx) => {
       const uref = doc(db, UNIQ, uniqId)
@@ -233,7 +260,7 @@ export async function submitChecklist(
       const cref = doc(db, COUNTERS, COUNTER_CL_DOC_ID)
       const csnap = await tx.get(cref)
       const last = csnap.exists() ? Number((csnap.data() as { lastSerial?: number }).lastSerial ?? 0) : 0
-      const clDocSerial = last + 1
+      clDocSerial = last + 1
       tx.set(cref, { lastSerial: clDocSerial }, { merge: true })
       tx.set(uref, {
         resultId,
@@ -251,8 +278,29 @@ export async function submitChecklist(
 
   const approvalLink = buildApprovalLink(approvalToken)
   onProgress?.('email')
+  const emailPayload: ChecklistEmailNotificationPayload = {
+    checklistKey: payload.checklistKey,
+    checklistTitle: payload.checklistTitle,
+    submitterName: payload.submitterName,
+    submitterEmail: payload.submitterEmail,
+    checkDate: payload.checkDate,
+    totalErrors: payload.totalErrors,
+    createdAtUtc: createdAtUtc.toISOString(),
+    approvalToken: payload.approvalToken,
+    isApproved: false,
+    approvedAtUtc: null,
+    details: payload.details.map((d) => ({
+      itemKey: d.itemKey,
+      groupTitle: d.groupTitle,
+      label: d.label,
+      standard: d.standard,
+      passed: d.passed,
+      note: d.note ?? null,
+    })),
+    clDocSerial,
+  }
   try {
-    await requestChecklistEmailNotification(resultId)
+    await requestChecklistEmailNotification(emailPayload)
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e)
     throw new Error(
@@ -564,8 +612,14 @@ export async function fetchDailyStatus(params: { fromDate: string; toDate: strin
 }
 
 export async function resendChecklistEmail(resultId: string): Promise<{ message: string; skipped?: boolean }> {
+  const db = getDb()
+  const snap = await getDoc(doc(db, RESULTS, resultId))
+  if (!snap.exists()) {
+    return { message: 'Không tìm thấy bản ghi checklist.', skipped: true }
+  }
+  const r = mapDoc(snap.id, snap.data() as Record<string, unknown>)
   try {
-    await requestChecklistEmailNotification(resultId)
+    await requestChecklistEmailNotification(resultDocToEmailPayload(r))
     return { message: 'Đã gửi lại email (Resend).' }
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e)
