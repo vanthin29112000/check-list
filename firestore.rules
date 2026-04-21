@@ -10,5 +10,9 @@ service cloud.firestore {
     match /checklistUniqueness/{id} {
       allow read, create, delete: if request.auth != null;
     }
+    // Bộ đếm số văn bản PDF (001/CL-CNTTDL, …) — chỉ ghi qua transaction khi nộp checklist.
+    match /checklistCounters/{id} {
+      allow read, create, update: if request.auth != null;
+    }
   }
 }

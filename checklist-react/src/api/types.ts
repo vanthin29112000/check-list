@@ -67,6 +67,8 @@ export interface HistoryRow {
   isApproved: boolean
   approvedAtUtc?: string | null
   approvalLink: string
+  /** Số văn bản PDF 001/CL-CNTTDL… (bản ghi cũ có thể không có) */
+  clDocSerial?: number
   details: HistoryDetail[]
 }
 

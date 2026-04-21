@@ -10,6 +10,8 @@ import type { ChecklistResultDetailDoc, ChecklistResultDoc } from "./models";
 
 const RESULTS = "checklistResults";
 const UNIQ = "checklistUniqueness";
+const COUNTERS = "checklistCounters";
+const COUNTER_CL_DOC_ID = "clCnttDl";
 
 function uniqDocId(checklistKey: string, email: string, checkDate: string): string {
   return `${checklistKey}|${email.trim().toLowerCase()}|${checkDate}`;
@@ -60,6 +62,10 @@ function mapDoc(id: string, data: Record<string, unknown>): ChecklistResultDoc {
     approvedAtUtc: data.approvedAtUtc ? tsToDate(data.approvedAtUtc as Timestamp | Date) : null,
     details: (data.details as ChecklistResultDetailDoc[]) ?? [],
     pdfStoragePath: (data.pdfStoragePath as string | null | undefined) ?? null,
+    clDocSerial: (() => {
+      const n = Number(data.clDocSerial);
+      return Number.isFinite(n) && n > 0 ? Math.floor(n) : undefined;
+    })(),
   };
 }
 
@@ -161,12 +167,18 @@ export async function submitChecklist(
   };
 
   const uniqId = uniqDocId(def.key, body.submitterEmail, checkDateStr);
+  let clDocSerial = 0;
   await db.runTransaction(async (tx) => {
     const uref = db.collection(UNIQ).doc(uniqId);
     const usnap = await tx.get(uref);
     if (usnap.exists) throw new Error("DUPLICATE:Đã có bản ghi cho checklist này trong ngày với cùng email.");
+    const cref = db.collection(COUNTERS).doc(COUNTER_CL_DOC_ID);
+    const csnap = await tx.get(cref);
+    const last = csnap.exists ? Number((csnap.data() as { lastSerial?: number }).lastSerial ?? 0) : 0;
+    clDocSerial = last + 1;
+    tx.set(cref, { lastSerial: clDocSerial }, { merge: true });
     tx.set(uref, { resultId, checklistKey: def.key, submitterEmail: body.submitterEmail.trim(), checkDate: checkDateStr });
-    tx.set(db.collection(RESULTS).doc(resultId), payload);
+    tx.set(db.collection(RESULTS).doc(resultId), { ...payload, clDocSerial });
   });
 
   const resultDoc: ChecklistResultDoc = {
@@ -182,6 +194,7 @@ export async function submitChecklist(
     isApproved: false,
     approvedAtUtc: null,
     details,
+    clDocSerial,
   };
 
   const pdfBuffer = await generateChecklistPdfBuffer(resultDoc);
@@ -203,8 +216,10 @@ async function sendSubmitEmails(
   approvalLink: string,
 ): Promise<void> {
   const body = buildSubmitBody(result, failures);
-  const bodyWithLink = `${body}\n\nLink duyệt hồ sơ checklist:\n${approvalLink}`;
-  const subject = `[Checklist] ${result.checklistTitle} — ${result.totalErrors} lỗi — ${result.submitterName}`;
+  const dashboardLink = `${getPublicBaseUrl()}/dashboard`;
+  const leaderLinks = `\n\nLink duyệt hồ sơ checklist:\n${approvalLink}\n\nXem tổng quan (dashboard):\n${dashboardLink}`;
+  const bodyForLeaders = `${body}${leaderLinks}`;
+  const subjectSubmitter = `[Checklist] Kết quả — ${result.checklistTitle} — ${result.submitterName}`;
   const attachment: EmailAttachment = {
     fileName: `checklist-${result.checklistKey}-${result.checkDate.replace(/-/g, "")}.pdf`,
     content: pdfBuffer,
@@ -212,7 +227,7 @@ async function sendSubmitEmails(
   };
 
   try {
-    await sendEmail(result.submitterEmail, subject, bodyWithLink, [attachment]);
+    await sendEmail(result.submitterEmail, subjectSubmitter, body, [attachment]);
   } catch (e) {
     // eslint-disable-next-line no-console
     console.error("Gửi email xác nhận submit thất bại", e);
@@ -220,9 +235,11 @@ async function sendSubmitEmails(
 
   const threshold = getErrorThreshold();
   const managers = getManagerEmails();
+  const submitterLower = result.submitterEmail.trim().toLowerCase();
   if (result.totalErrors > threshold) {
-    const alertBody = `Cảnh báo: checklist vượt ngưỡng lỗi (${threshold}).\n\n${bodyWithLink}`;
+    const alertBody = `Cảnh báo: checklist vượt ngưỡng lỗi (${threshold}).\n\n${bodyForLeaders}`;
     for (const mgr of managers) {
+      if (mgr.trim().toLowerCase() === submitterLower) continue;
       try {
         await sendEmail(mgr, `[CẢNH BÁO] ${result.checklistTitle} — ${result.totalErrors} lỗi`, alertBody, [attachment]);
       } catch (e) {
@@ -232,8 +249,9 @@ async function sendSubmitEmails(
     }
   } else {
     for (const mgr of managers) {
+      if (mgr.trim().toLowerCase() === submitterLower) continue;
       try {
-        await sendEmail(mgr, `[DUYỆT] ${result.checklistTitle} — ${result.submitterName}`, bodyWithLink, [attachment]);
+        await sendEmail(mgr, `[DUYỆT] ${result.checklistTitle} — ${result.submitterName}`, bodyForLeaders, [attachment]);
       } catch (e) {
         // eslint-disable-next-line no-console
         console.error("Gửi email duyệt cho quản lý thất bại", mgr, e);

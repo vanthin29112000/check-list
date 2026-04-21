@@ -3,6 +3,13 @@ import type { ChecklistResultDoc } from "./models";
 
 const MANAGER_NAME = "Nguyễn Hoàng Bảo Trung";
 const TZ = "Asia/Ho_Chi_Minh";
+const CL_DOC_CODE = "CL-CNTTDL";
+
+function formatClDocLine(serial: number | undefined): string {
+  const n = serial != null && Number.isFinite(serial) && serial > 0 ? Math.floor(serial) : 0;
+  const num = n > 0 ? String(n).padStart(3, "0") : "---";
+  return `Số: ${num}/${CL_DOC_CODE}`;
+}
 
 function toDisplayInTz(utc: Date): Date {
   const s = utc.toLocaleString("en-US", { timeZone: TZ });
@@ -26,7 +33,7 @@ export function generateChecklistPdfBuffer(result: ChecklistResultDoc): Promise<
     doc.text("TRUNG TÂM QUẢN LÝ KÝ TÚC XÁ", { align: "center" }).moveDown(0.2);
     doc.font("Helvetica-Bold").text("PHÒNG CTSV-CĐS", { align: "center" }).font("Helvetica");
     doc.moveDown(0.3);
-    doc.text("Số:       /CL-CNTTDL", { align: "center" });
+    doc.text(formatClDocLine(result.clDocSerial), { align: "center" });
     doc.moveDown(0.8);
     doc.font("Helvetica-Bold").text("CỘNG HÒA XÃ HỘI CHỦ NGHĨA VIỆT NAM", { align: "center" });
     doc.text("Độc lập – Tự do – Hạnh phúc", { align: "center" }).font("Helvetica");

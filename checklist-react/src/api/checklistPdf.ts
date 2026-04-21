@@ -21,6 +21,10 @@ export function downloadChecklistPdf(row: HistoryRow): void {
 
   line('PHIẾU CHECKLIST (xuất từ ứng dụng)', 12, true)
   y += 6
+  if (row.clDocSerial != null && row.clDocSerial > 0) {
+    line(`Số: ${String(row.clDocSerial).padStart(3, '0')}/CL-CNTTDL`, 10, true)
+    y += 4
+  }
   line(`Tiêu đề: ${row.checklistTitle}`, 10, true)
   line(`Người gửi: ${row.submitterName} <${row.submitterEmail}>`, 10)
   line(`Ngày kiểm tra: ${row.checkDate}`, 10)

@@ -44,8 +44,16 @@ function loadFontPaths() {
   return { FONT_REG: _fontReg, FONT_BOLD: _fontBold, FONT_ITALIC: _fontItalic }
 }
 
-const MANAGER_NAME = 'Nguyễn Hoàng Bảo Trung'
+const MANAGER_NAME =
+  (process.env.PDF_LEADER_NAME || 'Nguyễn Hoàng Bảo Trung').trim() || 'Nguyễn Hoàng Bảo Trung'
 const TZ = 'Asia/Ho_Chi_Minh'
+const CL_DOC_CODE = 'CL-CNTTDL'
+
+function formatClDocLine(rawSerial) {
+  const n = Number(rawSerial)
+  const num = Number.isFinite(n) && n > 0 ? String(Math.floor(n)).padStart(3, '0') : '---'
+  return `Số: ${num}/${CL_DOC_CODE}`
+}
 
 function toDisplayInTz(utc) {
   const s = utc.toLocaleString('en-US', { timeZone: TZ })
@@ -195,6 +203,7 @@ export function buildChecklistPdfBase64(raw) {
     isApproved: Boolean(raw.isApproved),
     approvedAtUtc: raw.isApproved ? toJsDate(raw.approvedAtUtc) : null,
     details: Array.isArray(raw.details) ? raw.details : [],
+    clDocSerial: Number(raw.clDocSerial),
   }
 
   const fileName = `checklist-${result.checklistKey}-${String(result.checkDate).replace(/-/g, '')}.pdf`
@@ -236,7 +245,9 @@ export function buildChecklistPdfBase64(raw) {
     yL = doc.y
     doc.font(FONT_BOLD).text('PHÒNG CTSV-CĐS', xL, yL, { width: colW, align: 'center', lineGap: 2 })
     yL = doc.y
-    doc.font(FONT_REG).text('Số:       /CL-CNTTDL', xL, yL, { width: colW, align: 'center', lineGap: 2 })
+    doc
+      .font(FONT_REG)
+      .text(formatClDocLine(result.clDocSerial), xL, yL, { width: colW, align: 'center', lineGap: 2 })
     yL = doc.y
 
     let yR = y0

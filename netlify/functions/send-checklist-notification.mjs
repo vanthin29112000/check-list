@@ -48,6 +48,24 @@ function splitEmails(raw) {
     .filter(Boolean)
 }
 
+/** Hợp nhất LEADER_EMAILS + HR_EMAILS + MANAGER_EMAILS (legacy), bỏ trùng (không phân biệt hoa thường). */
+function collectNotificationRecipients() {
+  const raw = [
+    ...splitEmails(process.env.LEADER_EMAILS),
+    ...splitEmails(process.env.HR_EMAILS),
+    ...splitEmails(process.env.MANAGER_EMAILS),
+  ]
+  const seen = new Set()
+  const out = []
+  for (const e of raw) {
+    const k = e.toLowerCase()
+    if (seen.has(k)) continue
+    seen.add(k)
+    out.push(e)
+  }
+  return out
+}
+
 function formatDdMmYyyy(ymd) {
   const [y, m, d] = ymd.split('-').map(Number)
   if (!y) return ymd
@@ -72,7 +90,8 @@ function normalizeDocForPdf(data) {
   }
 }
 
-function buildEmailBody(data, approveUrl) {
+/** Nội dung kết quả checklist (dùng cho cả người check và lãnh đạo). */
+function buildResultSummaryText(data) {
   const details = Array.isArray(data.details) ? data.details : []
   const failures = details.filter((x) => !x.passed)
   const lines = [
@@ -90,8 +109,25 @@ function buildEmailBody(data, approveUrl) {
       lines.push(`- [${f.groupTitle}] ${f.label}: ${f.standard}${note}`)
     }
   }
-  lines.push('', `Link duyệt checklist:`, approveUrl)
   return lines.join('\n')
+}
+
+/** Email người nộp: chỉ kết quả (không kèm link duyệt / dashboard). */
+function buildSubmitterEmailText(data) {
+  return buildResultSummaryText(data)
+}
+
+/** Email lãnh đạo: kết quả + link duyệt + link dashboard. */
+function buildLeaderEmailText(data, approveUrl, dashboardUrl) {
+  return [
+    buildResultSummaryText(data),
+    '',
+    'Link duyệt checklist:',
+    approveUrl,
+    '',
+    'Xem tổng quan (dashboard):',
+    dashboardUrl,
+  ].join('\n')
 }
 
 function createSmtpTransport() {
@@ -189,11 +225,13 @@ export const handler = async (event) => {
 
     const approvalToken = String(data.approvalToken || '')
     const approveUrl = `${publicBase}/approve?token=${encodeURIComponent(approvalToken)}`
-    const textBody = buildEmailBody(data, approveUrl)
-    const subject = `[Checklist] ${data.checklistTitle} — ${Number(data.totalErrors ?? 0)} lỗi — ${data.submitterName}`
+    const dashboardUrl = `${publicBase}/dashboard`
+    const textSubmitter = buildSubmitterEmailText(data)
+    const textLeader = buildLeaderEmailText(data, approveUrl, dashboardUrl)
+    const subjectSubmitter = `[Checklist] Kết quả — ${data.checklistTitle} — ${data.submitterName}`
 
     const toSubmitter = String(data.submitterEmail || '').trim()
-    const managers = splitEmails(process.env.MANAGER_EMAILS)
+    const managers = collectNotificationRecipients()
     const threshold = Number(process.env.ERROR_THRESHOLD ?? '5')
     const totalErrors = Number(data.totalErrors ?? 0)
     const submitterLower = toSubmitter.toLowerCase()
@@ -215,7 +253,8 @@ export const handler = async (event) => {
       pdfErrorNote = `\n\n(Lưu ý: không tạo được file PDF đính kèm — ${msg}. Vui lòng tải PDF từ màn hình Lịch sử / Xuất PDF.)`
     }
 
-    const textBodyWithPdfNote = textBody + pdfErrorNote
+    const submitterMailText = textSubmitter + pdfErrorNote
+    const leaderMailText = textLeader + pdfErrorNote
 
     const sendOne = async (to, subj, txt, attachments = pdfAttachments) => {
       /** @type {import('nodemailer/lib/mailer').Options} */
@@ -235,7 +274,7 @@ export const handler = async (event) => {
     }
 
     if (toSubmitter) {
-      await sendOne(toSubmitter, subject, textBodyWithPdfNote)
+      await sendOne(toSubmitter, subjectSubmitter, submitterMailText)
     }
 
     for (const mgr of managers) {
@@ -245,8 +284,8 @@ export const handler = async (event) => {
         ? `[CẢNH BÁO] ${data.checklistTitle} — ${totalErrors} lỗi`
         : `[DUYỆT] ${data.checklistTitle} — ${data.submitterName}`
       const bodyWithAlert = alert
-        ? `Cảnh báo: checklist vượt ngưỡng lỗi (${threshold}).\n\n${textBodyWithPdfNote}`
-        : textBodyWithPdfNote
+        ? `Cảnh báo: checklist vượt ngưỡng lỗi (${threshold}).\n\n${leaderMailText}`
+        : leaderMailText
       try {
         await sendOne(mgr, subj, bodyWithAlert)
       } catch (e) {

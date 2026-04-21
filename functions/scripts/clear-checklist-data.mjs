@@ -95,6 +95,12 @@ async function main() {
   for (const name of COLLECTIONS) {
     await deleteCollection(db, name)
   }
+  try {
+    await db.doc('checklistCounters/clCnttDl').delete()
+    console.log('Đã xóa bộ đếm số văn bản (checklistCounters/clCnttDl); lần nộp tiếp theo bắt đầu lại từ 001.')
+  } catch (e) {
+    console.warn('Không xóa được checklistCounters/clCnttDl (có thể chưa tồn tại):', e?.message ?? e)
+  }
   console.log('Hoàn tất.')
 }
 

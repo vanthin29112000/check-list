@@ -28,6 +28,8 @@ import type {
 
 const RESULTS = 'checklistResults'
 const UNIQ = 'checklistUniqueness'
+const COUNTERS = 'checklistCounters'
+const COUNTER_CL_DOC_ID = 'clCnttDl'
 
 export function getPublicBaseUrl(): string {
   const v = (import.meta.env.VITE_PUBLIC_BASE_URL as string | undefined)?.trim()
@@ -74,6 +76,7 @@ interface ResultDoc {
   isApproved: boolean
   approvedAtUtc: Date | null
   details: ResultDetailDoc[]
+  clDocSerial?: number
 }
 
 function mapDoc(id: string, data: Record<string, unknown>): ResultDoc {
@@ -91,6 +94,10 @@ function mapDoc(id: string, data: Record<string, unknown>): ResultDoc {
     isApproved: Boolean(data.isApproved),
     approvedAtUtc: data.approvedAtUtc ? tsToDate(data.approvedAtUtc) : null,
     details: (data.details as ResultDetailDoc[]) ?? [],
+    clDocSerial: (() => {
+      const n = Number(data.clDocSerial)
+      return Number.isFinite(n) && n > 0 ? Math.floor(n) : undefined
+    })(),
   }
 }
 
@@ -223,13 +230,18 @@ export async function submitChecklist(
       const uref = doc(db, UNIQ, uniqId)
       const usnap = await tx.get(uref)
       if (usnap.exists()) throw new Error('DUPLICATE:Đã có bản ghi cho checklist này trong ngày với cùng email.')
+      const cref = doc(db, COUNTERS, COUNTER_CL_DOC_ID)
+      const csnap = await tx.get(cref)
+      const last = csnap.exists() ? Number((csnap.data() as { lastSerial?: number }).lastSerial ?? 0) : 0
+      const clDocSerial = last + 1
+      tx.set(cref, { lastSerial: clDocSerial }, { merge: true })
       tx.set(uref, {
         resultId,
         checklistKey: def.key,
         submitterEmail: body.submitterEmail.trim(),
         checkDate: checkDateStr,
       })
-      tx.set(doc(db, RESULTS, resultId), payload)
+      tx.set(doc(db, RESULTS, resultId), { ...payload, clDocSerial })
     })
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e)
@@ -294,6 +306,7 @@ function mapHistoryRow(r: ResultDoc): HistoryRow {
     isApproved: r.isApproved,
     approvedAtUtc: r.approvedAtUtc?.toISOString() ?? null,
     approvalLink: buildApprovalLink(r.approvalToken),
+    ...(r.clDocSerial != null ? { clDocSerial: r.clDocSerial } : {}),
     details: orderDetailsForHistory(def, r.details),
   }
 }

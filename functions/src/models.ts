@@ -21,4 +21,6 @@ export interface ChecklistResultDoc {
   approvedAtUtc: Date | null;
   details: ChecklistResultDetailDoc[];
   pdfStoragePath?: string | null;
+  /** Số thứ tự văn bản trên PDF: hiển thị 001/CL-CNTTDL, … */
+  clDocSerial?: number;
 }
