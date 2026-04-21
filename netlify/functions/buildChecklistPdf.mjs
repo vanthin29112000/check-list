@@ -277,7 +277,9 @@ export function buildChecklistPdfBase64(raw) {
       const g = String(item.groupTitle ?? '')
       if (g !== prevGroup) {
         prevGroup = g
-        y = drawSectionRow(doc, layout, g, y, FONT_BOLD, pageBottom)
+        if (String(g).trim()) {
+          y = drawSectionRow(doc, layout, g, y, FONT_BOLD, pageBottom)
+        }
       }
       y = drawDetailRow(doc, layout, item, y, FONT_REG, FONT_BOLD, pageBottom, redrawHeader)
     }

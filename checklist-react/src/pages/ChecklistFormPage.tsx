@@ -489,10 +489,12 @@ export default function ChecklistFormPage() {
         )}
       </Card>
 
-      {sectionBlocks.map((block) => (
+      {sectionBlocks.map((block, blockIdx) => {
+        const sectionLabel = block.groupTitle.trim() || 'Kiểm tra'
+        return (
         <Card
-          key={block.groupTitle}
-          title={`${block.icon} ${block.groupTitle}`}
+          key={`${checklistKey ?? 'ck'}-${blockIdx}`}
+          title={`${block.icon} ${sectionLabel}`}
           size="small"
           styles={{ body: { background: '#fcfcfc' } }}
           extra={
@@ -528,7 +530,8 @@ export default function ChecklistFormPage() {
                   key: 'items',
                   label: (() => {
                     const s = getSectionStats(block.data)
-                    return `${block.groupTitle} • Đạt ${s.pass} • Lỗi ${s.fail} • Chưa chọn ${s.todo}`
+                    const lab = block.groupTitle.trim() || 'Kiểm tra'
+                    return `${lab} • Đạt ${s.pass} • Lỗi ${s.fail} • Chưa chọn ${s.todo}`
                   })(),
                   children: (
                     <Space direction="vertical" style={{ width: '100%' }} size="small">
@@ -585,7 +588,8 @@ export default function ChecklistFormPage() {
             />
           )}
         </Card>
-      ))}
+        )
+      })}
 
       {isMobile ? (
         <div className="mobile-submit-bar">

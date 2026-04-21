@@ -69,9 +69,11 @@ export function generateChecklistPdfBuffer(result: ChecklistResultDoc): Promise<
     for (const item of result.details) {
       if (item.groupTitle !== prevGroup) {
         prevGroup = item.groupTitle;
-        if (doc.y > doc.page.height - 100) doc.addPage();
-        doc.font("Helvetica-Bold").fontSize(10).text(item.groupTitle);
-        doc.font("Helvetica").moveDown(0.15);
+        if (item.groupTitle.trim()) {
+          if (doc.y > doc.page.height - 100) doc.addPage();
+          doc.font("Helvetica-Bold").fontSize(10).text(item.groupTitle);
+          doc.font("Helvetica").moveDown(0.15);
+        }
       }
       if (doc.y > doc.page.height - 80) doc.addPage();
       doc.font("Helvetica-Bold").fontSize(9).text(item.label);
