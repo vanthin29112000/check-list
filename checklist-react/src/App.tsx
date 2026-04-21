@@ -225,7 +225,19 @@ export default function App() {
         </Sider>
       )}
       <Layout>
-        <Header style={{ background: '#fff', borderBottom: '1px solid #f0f0f0', paddingInline: isMobile ? 12 : 16, height: 'auto', lineHeight: 1, paddingBlock: 10 }}>
+        <Header
+          style={{
+            background: '#fff',
+            borderBottom: '1px solid #f0f0f0',
+            paddingInline: isMobile ? 12 : 16,
+            height: 'auto',
+            lineHeight: 1,
+            paddingBlock: 10,
+            position: 'sticky',
+            top: 0,
+            zIndex: 1000,
+          }}
+        >
           <Space direction="vertical" style={{ width: '100%' }} size={8}>
             <Space style={{ width: '100%', justifyContent: 'space-between' }}>
               <Space size={8}>

@@ -88,13 +88,10 @@ export default function ChecklistFormPage() {
         }
         setCompletedTodayByKey(completionMap)
 
-        if (res.checklists.length > 0) {
-          setChecklistKey((prev) => {
-            if (prev && (completionMap[prev] ?? 0) === 0) return prev
-            const firstAvailable = res.checklists.find((c) => (completionMap[c.key] ?? 0) === 0)
-            return firstAvailable?.key
-          })
-        }
+        setChecklistKey((prev) => {
+          if (prev && (completionMap[prev] ?? 0) === 0) return prev
+          return undefined
+        })
       } catch (e) {
         notiApi.error({
           message: 'Không tải được checklist',
@@ -106,11 +103,10 @@ export default function ChecklistFormPage() {
   }, [notiApi, checkDate])
 
   useEffect(() => {
-    if (!catalog.length) return
-    if (checklistKey && (completedTodayByKey[checklistKey] ?? 0) === 0) return
-    const firstAvailable = catalog.find((c) => (completedTodayByKey[c.key] ?? 0) === 0)
-    setChecklistKey(firstAvailable?.key)
-  }, [catalog, checklistKey, completedTodayByKey])
+    if (!checklistKey) return
+    if ((completedTodayByKey[checklistKey] ?? 0) === 0) return
+    setChecklistKey(undefined)
+  }, [checklistKey, completedTodayByKey])
 
   const active = useMemo(() => catalog.find((c) => c.key === checklistKey), [catalog, checklistKey])
   const checklistOptions = useMemo(
@@ -142,7 +138,11 @@ export default function ChecklistFormPage() {
   }, [checklistKey])
 
   useEffect(() => {
-    if (!checklistKey) return
+    if (!checklistKey) {
+      setSubmitterName('')
+      setSubmitterEmail('')
+      return
+    }
     const assignee = resolveAssignee(checklistKey, checkDate)
     setSubmitterName(assignee.name)
     setSubmitterEmail(assignee.email)
@@ -564,8 +564,12 @@ export default function ChecklistFormPage() {
     },
   ]
 
+  const canSubmitMobile = Boolean(
+    active && summary.totalItems > 0 && hasAnyAvailableChecklist && summary.unansweredCount === 0,
+  )
+
   return (
-    <Space direction="vertical" size="middle" style={{ width: '100%' }}>
+    <Space direction="vertical" size="middle" style={{ width: '100%', paddingBottom: isMobile ? 110 : 0 }}>
       <Modal
         open={submitOverlayOpen}
         footer={null}
@@ -608,6 +612,14 @@ export default function ChecklistFormPage() {
           showIcon
           message="Hôm nay tất cả checklist đã hoàn thành."
           description="Bạn có thể xem lại kết quả ở màn hình Lịch sử."
+        />
+      )}
+      {hasAnyAvailableChecklist && !checklistKey && (
+        <Alert
+          type="warning"
+          showIcon
+          message="Vui lòng chọn checklist trước khi thao tác."
+          description="Chọn checklist ở dropdown phía trên để bắt đầu kiểm tra."
         />
       )}
 
@@ -848,7 +860,7 @@ export default function ChecklistFormPage() {
             block
             onClick={openConfirmBeforeSubmit}
             loading={busy}
-            disabled={!active || summary.totalItems === 0 || !hasAnyAvailableChecklist}
+            disabled={!canSubmitMobile}
           >
             {busy ? 'Đang gửi...' : 'Gửi checklist'}
           </Button>
@@ -859,7 +871,7 @@ export default function ChecklistFormPage() {
           size="large"
           onClick={openConfirmBeforeSubmit}
           loading={busy}
-          disabled={!active || summary.totalItems === 0 || !hasAnyAvailableChecklist}
+          disabled={!canSubmitMobile}
         >
           {busy ? 'Đang gửi...' : 'Gửi checklist'}
         </Button>
@@ -874,14 +886,15 @@ export default function ChecklistFormPage() {
           box-shadow: inset 0 0 0 1px #ff4d4f;
         }
         .mobile-submit-bar {
-          position: sticky;
+          position: fixed;
           bottom: 0;
+          left: 0;
+          right: 0;
           z-index: 20;
           background: #fff;
           border-top: 1px solid #f0f0f0;
           box-shadow: 0 -6px 12px rgba(0, 0, 0, 0.06);
           padding: 10px 12px calc(10px + env(safe-area-inset-bottom));
-          margin: 0 -8px;
         }
         .mobile-submit-summary {
           display: flex;
