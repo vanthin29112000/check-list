@@ -1,6 +1,7 @@
 import { initializeApp, cert, getApps } from 'firebase-admin/app'
 import { getFirestore } from 'firebase-admin/firestore'
 import { getAuth } from 'firebase-admin/auth'
+import nodemailer from 'nodemailer'
 import { buildChecklistPdfBase64 } from './buildChecklistPdf.mjs'
 
 function initAdmin() {
@@ -93,6 +94,28 @@ function buildEmailBody(data, approveUrl) {
   return lines.join('\n')
 }
 
+function createSmtpTransport() {
+  const host = process.env.SMTP_HOST?.trim()
+  const user = process.env.SMTP_USER?.trim()
+  const pass = process.env.SMTP_PASS?.trim()
+  if (!host || !user || !pass) {
+    throw new Error(
+      'Thiếu cấu hình SMTP: đặt SMTP_HOST, SMTP_USER, SMTP_PASS trong .env (gốc repo) hoặc Netlify environment.',
+    )
+  }
+  const port = Number(process.env.SMTP_PORT || '587')
+  const secure =
+    process.env.SMTP_SECURE === 'true' ||
+    process.env.SMTP_SECURE === '1' ||
+    port === 465
+  return nodemailer.createTransport({
+    host,
+    port,
+    secure,
+    auth: { user, pass },
+  })
+}
+
 export const handler = async (event) => {
   const origin = event.headers.origin || event.headers.Origin || ''
   const headers = corsHeaders(origin)
@@ -139,9 +162,13 @@ export const handler = async (event) => {
     if (!data) {
       return { statusCode: 404, headers, body: JSON.stringify({ error: 'Không tìm thấy checklist' }) }
     }
-    const resendKey = process.env.RESEND_API_KEY?.trim()
-    if (!resendKey) {
-      return { statusCode: 501, headers, body: JSON.stringify({ error: 'Chưa cấu hình RESEND_API_KEY trên Netlify' }) }
+
+    let transporter
+    try {
+      transporter = createSmtpTransport()
+    } catch (cfgErr) {
+      const msg = cfgErr instanceof Error ? cfgErr.message : String(cfgErr)
+      return { statusCode: 501, headers, body: JSON.stringify({ error: msg }) }
     }
 
     const publicBase = (process.env.PUBLIC_BASE_URL || '').replace(/\/$/, '')
@@ -156,12 +183,15 @@ export const handler = async (event) => {
       }
     }
 
+    const smtpUser = process.env.SMTP_USER?.trim() || ''
+    const fromHeader =
+      process.env.SMTP_FROM?.trim() || (smtpUser ? `Checklist <${smtpUser}>` : 'Checklist')
+
     const approvalToken = String(data.approvalToken || '')
     const approveUrl = `${publicBase}/approve?token=${encodeURIComponent(approvalToken)}`
     const textBody = buildEmailBody(data, approveUrl)
     const subject = `[Checklist] ${data.checklistTitle} — ${Number(data.totalErrors ?? 0)} lỗi — ${data.submitterName}`
 
-    const from = process.env.RESEND_FROM?.trim() || 'onboarding@resend.dev'
     const toSubmitter = String(data.submitterEmail || '').trim()
     const managers = splitEmails(process.env.MANAGER_EMAILS)
     const threshold = Number(process.env.ERROR_THRESHOLD ?? '5')
@@ -172,10 +202,6 @@ export const handler = async (event) => {
       return { statusCode: 400, headers, body: JSON.stringify({ error: 'Không có địa chỉ email người gửi hoặc quản lý' }) }
     }
 
-    /** Chưa verify domain trên Resend: API chỉ cho gửi tới inbox tài khoản. Đặt RESEND_SANDBOX_FORWARD_TO = email đó → mọi thư gửi tới đây, nội dung ghi người nhận thật. */
-    const sandboxForward = process.env.RESEND_SANDBOX_FORWARD_TO?.trim()
-
-    /** PDF checklist; lỗi tạo PDF → gửi mail text + ghi chú (không fail cả function). */
     let pdfAttachments = null
     let pdfErrorNote = ''
     try {
@@ -191,35 +217,21 @@ export const handler = async (event) => {
 
     const textBodyWithPdfNote = textBody + pdfErrorNote
 
-    const sendOne = async (intendedTo, subj, txt, attachments = pdfAttachments) => {
-      const forward = sandboxForward && sandboxForward.toLowerCase() !== intendedTo.toLowerCase()
-      const to = forward ? sandboxForward : intendedTo
-      const subjectOut = forward ? `[Gửi hộ → ${intendedTo}] ${subj}` : subj
-      const textOut = forward
-        ? [
-            '— Chế độ sandbox Resend (chưa có domain): thư chỉ tới inbox được phép.',
-            `Người nhận dự kiến: ${intendedTo}`,
-            '─'.repeat(48),
-            '',
-            txt,
-          ].join('\n')
-        : txt
-      const payload = { from, to: [to], subject: subjectOut, text: textOut }
+    const sendOne = async (to, subj, txt, attachments = pdfAttachments) => {
+      /** @type {import('nodemailer/lib/mailer').Options} */
+      const mail = {
+        from: fromHeader,
+        to,
+        subject: subj,
+        text: txt,
+      }
       if (attachments?.length) {
-        payload.attachments = attachments
+        mail.attachments = attachments.map((a) => ({
+          filename: a.filename,
+          content: Buffer.from(String(a.content), 'base64'),
+        }))
       }
-      const res = await fetch('https://api.resend.com/emails', {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${resendKey}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(payload),
-      })
-      const raw = await res.text()
-      if (!res.ok) {
-        throw new Error(`Resend ${res.status}: ${raw}`)
-      }
+      await transporter.sendMail(mail)
     }
 
     if (toSubmitter) {
@@ -239,14 +251,14 @@ export const handler = async (event) => {
         await sendOne(mgr, subj, bodyWithAlert)
       } catch (e) {
         // eslint-disable-next-line no-console
-        console.error('Resend manager mail failed', mgr, e)
+        console.error('SMTP manager mail failed', mgr, e)
       }
     }
 
     return {
       statusCode: 200,
       headers,
-      body: JSON.stringify({ ok: true, pdfAttached: Boolean(pdfAttachments?.length) }),
+      body: JSON.stringify({ ok: true, pdfAttached: Boolean(pdfAttachments?.length), transport: 'smtp' }),
     }
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e)

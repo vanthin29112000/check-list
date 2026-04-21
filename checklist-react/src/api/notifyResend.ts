@@ -52,9 +52,9 @@ function notifyUrl(): string | null {
 }
 
 const SKIP_NOTIFY_HELP =
-  'Local: (1) `VITE_NOTIFY_FUNCTION_URL` (URL function deploy) — Vite sẽ proxy cùng origin để tránh CORS; (2) `netlify dev` tại gốc repo → http://localhost:8888; (3) `VITE_NETLIFY_DEV_PROXY=1` + gốc repo `npm run dev:functions`. RESEND_* / FIREBASE_SERVICE_ACCOUNT_JSON: `.env` gốc repo (local function) hoặc Netlify (deploy).'
+  'Local: (1) `VITE_NOTIFY_FUNCTION_URL` (URL function deploy) — Vite proxy cùng origin; (2) `netlify dev` gốc repo → http://localhost:8888; (3) `VITE_NETLIFY_DEV_PROXY=1` + `npm run dev:functions`. Function cần SMTP_* + FIREBASE_SERVICE_ACCOUNT_JSON trong `.env` gốc repo hoặc Netlify.'
 
-/** Gọi Netlify Function → Resend (cần RESEND_* + FIREBASE_SERVICE_ACCOUNT_JSON trên Netlify). */
+/** Gọi Netlify Function gửi mail (SMTP qua Nodemailer). */
 export async function requestChecklistEmailNotification(resultId: string): Promise<void> {
   const url = notifyUrl()
   if (!url) {
