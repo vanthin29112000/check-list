@@ -303,6 +303,10 @@ export const handler = async (event) => {
     const msg = e instanceof Error ? e.message : String(e)
     // eslint-disable-next-line no-console
     console.error('send-checklist-notification', e)
-    return { statusCode: 500, headers: corsHeaders(origin), body: JSON.stringify({ error: msg }) }
+    let detail = msg
+    if (/insufficient permissions|permission.?denied|PERMISSION_DENIED/i.test(msg)) {
+      detail = `${msg} — Thường do Firestore (Admin SDK): (1) FIREBASE_SERVICE_ACCOUNT_JSON phải là private key của đúng Firebase project mà app đang dùng (cùng project_id với VITE_FIREBASE_PROJECT_ID). (2) Google Cloud Console → IAM → tài khoản firebase-adminsdk-… cần quyền truy cập Firestore (thường có sẵn; nếu thiếu thêm vai trò "Cloud Datastore User" hoặc "Firebase Admin"). (3) Tạo lại private key mới nếu key cũ đã thu hồi.`
+    }
+    return { statusCode: 500, headers: corsHeaders(origin), body: JSON.stringify({ error: detail }) }
   }
 }
