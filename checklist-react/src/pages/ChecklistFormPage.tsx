@@ -7,6 +7,10 @@ import type { ChecklistDefinition, ChecklistItemDef } from '../api/types'
 
 type RowData = ChecklistItemDef & { groupTitle: string }
 
+function subStateKey(itemKey: string, subKey: string): string {
+  return `${itemKey}::${subKey}`
+}
+
 export default function ChecklistFormPage() {
   const { md } = Grid.useBreakpoint()
   const isMobile = !md
@@ -19,6 +23,7 @@ export default function ChecklistFormPage() {
   const [checkDate] = useState<Dayjs>(dayjs())
 
   const [passedByKey, setPassedByKey] = useState<Record<string, boolean | undefined>>({})
+  const [subPassedByKey, setSubPassedByKey] = useState<Record<string, boolean | undefined>>({})
   const [noteByKey, setNoteByKey] = useState<Record<string, string>>({})
   const [invalidItemKey, setInvalidItemKey] = useState<string | null>(null)
   const [hasTriedSubmit, setHasTriedSubmit] = useState(false)
@@ -96,6 +101,7 @@ export default function ChecklistFormPage() {
 
   useEffect(() => {
     setPassedByKey({})
+    setSubPassedByKey({})
     setNoteByKey({})
     setInvalidItemKey(null)
     setHasTriedSubmit(false)
@@ -119,8 +125,13 @@ export default function ChecklistFormPage() {
         hydratedDraftRef.current = true
         return
       }
-      const draft = JSON.parse(raw) as { passedByKey?: Record<string, boolean>; noteByKey?: Record<string, string> }
+      const draft = JSON.parse(raw) as {
+        passedByKey?: Record<string, boolean>
+        subPassedByKey?: Record<string, boolean>
+        noteByKey?: Record<string, string>
+      }
       setPassedByKey(draft.passedByKey ?? {})
+      setSubPassedByKey(draft.subPassedByKey ?? {})
       setNoteByKey(draft.noteByKey ?? {})
       hydratedDraftRef.current = true
       notiApi.info({
@@ -141,6 +152,7 @@ export default function ChecklistFormPage() {
         const key = draftStorageKey(checklistKey, checkDate)
         const hasAnyData =
           Object.keys(passedByKey).length > 0 ||
+          Object.keys(subPassedByKey).length > 0 ||
           Object.keys(noteByKey).some((k) => (noteByKey[k] ?? '').trim().length > 0)
         if (!hasAnyData) {
           localStorage.removeItem(key)
@@ -150,6 +162,7 @@ export default function ChecklistFormPage() {
           key,
           JSON.stringify({
             passedByKey,
+            subPassedByKey,
             noteByKey,
             updatedAt: new Date().toISOString(),
           }),
@@ -159,7 +172,7 @@ export default function ChecklistFormPage() {
       }
     }, 300)
     return () => window.clearTimeout(t)
-  }, [checklistKey, checkDate, passedByKey, noteByKey])
+  }, [checklistKey, checkDate, passedByKey, subPassedByKey, noteByKey])
 
   const sectionBlocks = useMemo(() => {
     if (!active) return []
@@ -172,6 +185,14 @@ export default function ChecklistFormPage() {
 
   const allItems = useMemo(() => sectionBlocks.flatMap((b) => b.data), [sectionBlocks])
 
+  function resolveItemStatus(it: ChecklistItemDef): boolean | undefined {
+    if (!it.subchecks?.length) return passedByKey[it.key]
+    for (const sc of it.subchecks) {
+      if (subPassedByKey[subStateKey(it.key, sc.key)] === undefined) return undefined
+    }
+    return it.subchecks.every((sc) => subPassedByKey[subStateKey(it.key, sc.key)] === true)
+  }
+
   const summary = useMemo(() => {
     const totalItems = allItems.length
     let passedCount = 0
@@ -180,7 +201,7 @@ export default function ChecklistFormPage() {
     let missingFailedNotes = 0
 
     for (const it of allItems) {
-      const status = passedByKey[it.key]
+      const status = resolveItemStatus(it)
       if (status === true) passedCount += 1
       else if (status === false) {
         failedCount += 1
@@ -191,7 +212,7 @@ export default function ChecklistFormPage() {
     }
 
     return { totalItems, passedCount, failedCount, unansweredCount, missingFailedNotes }
-  }, [allItems, passedByKey, noteByKey])
+  }, [allItems, passedByKey, subPassedByKey, noteByKey])
 
   function setPassed(itemKey: string, passed: boolean) {
     if (invalidItemKey === itemKey) setInvalidItemKey(null)
@@ -201,6 +222,11 @@ export default function ChecklistFormPage() {
   function setNote(itemKey: string, note: string) {
     if (invalidItemKey === itemKey) setInvalidItemKey(null)
     setNoteByKey((s) => ({ ...s, [itemKey]: note }))
+  }
+
+  function setSubPassed(itemKey: string, subKey: string, passed: boolean) {
+    if (invalidItemKey === itemKey) setInvalidItemKey(null)
+    setSubPassedByKey((s) => ({ ...s, [subStateKey(itemKey, subKey)]: passed }))
   }
 
   function focusInvalidItem(itemKey: string, focusNote = false) {
@@ -220,7 +246,18 @@ export default function ChecklistFormPage() {
   function markSectionAllPass(rows: RowData[]) {
     setPassedByKey((s) => {
       const next = { ...s }
-      for (const row of rows) next[row.key] = true
+      for (const row of rows) {
+        if (!row.subchecks?.length) next[row.key] = true
+      }
+      return next
+    })
+    setSubPassedByKey((s) => {
+      const next = { ...s }
+      for (const row of rows) {
+        for (const sc of row.subchecks ?? []) {
+          next[subStateKey(row.key, sc.key)] = true
+        }
+      }
       return next
     })
   }
@@ -230,7 +267,7 @@ export default function ChecklistFormPage() {
     let fail = 0
     let todo = 0
     for (const r of rows) {
-      const v = passedByKey[r.key]
+      const v = resolveItemStatus(r)
       if (v === true) pass += 1
       else if (v === false) fail += 1
       else todo += 1
@@ -256,10 +293,30 @@ export default function ChecklistFormPage() {
 
     for (const g of active.groups) {
       for (const it of g.items) {
-        const status = passedByKey[it.key]
-        if (status === undefined) {
-          focusInvalidItem(it.key)
-          return { ok: false as const, message: `Chưa chọn Đạt/Không: ${it.label}` }
+        let status: boolean | undefined
+        let subPayload: { key: string; passed: boolean }[] | undefined
+
+        if (it.subchecks?.length) {
+          const parts: { key: string; passed: boolean }[] = []
+          for (const sc of it.subchecks) {
+            const v = subPassedByKey[subStateKey(it.key, sc.key)]
+            if (v === undefined) {
+              focusInvalidItem(it.key)
+              return {
+                ok: false as const,
+                message: `Chưa chọn đủ ổ đĩa / kiểm tra con: ${it.label} — ${sc.label}`,
+              }
+            }
+            parts.push({ key: sc.key, passed: v })
+          }
+          subPayload = parts
+          status = parts.every((p) => p.passed)
+        } else {
+          status = passedByKey[it.key]
+          if (status === undefined) {
+            focusInvalidItem(it.key)
+            return { ok: false as const, message: `Chưa chọn Đạt/Không: ${it.label}` }
+          }
         }
 
         const note = (noteByKey[it.key] ?? '').trim()
@@ -272,9 +329,7 @@ export default function ChecklistFormPage() {
           itemKey: it.key,
           passed: status,
           note: note || null,
-          // Giữ nguyên data structure: item có subcheck thì gửi đủ subcheck.
-          // UX đơn giản: kết quả subcheck theo kết quả Đạt/Không của item.
-          subchecks: it.subchecks?.map((sc) => ({ key: sc.key, passed: status })),
+          subchecks: subPayload,
         })
       }
     }
@@ -323,6 +378,7 @@ export default function ChecklistFormPage() {
       }
       // Reset trạng thái form sau khi gửi thành công để tránh submit trùng.
       setPassedByKey({})
+      setSubPassedByKey({})
       setNoteByKey({})
       setInvalidItemKey(null)
       setHasTriedSubmit(false)
@@ -379,29 +435,45 @@ export default function ChecklistFormPage() {
     {
       title: 'Tiêu chuẩn',
       dataIndex: 'standard',
-      width: 360,
-      render: (value: string, r) => (
-        <Space direction="vertical" size={2}>
-          <Typography.Text>{value}</Typography.Text>
-          {r.subchecks?.length ? (
-            <Typography.Text type="secondary">Chi tiết: {r.subchecks.map((s) => s.label).join('; ')}</Typography.Text>
-          ) : null}
-        </Space>
-      ),
+      width: 340,
+      render: (value: string) => <Typography.Text>{value}</Typography.Text>,
     },
     {
       title: 'Kiểm tra',
       key: 'check',
-      width: 190,
-      render: (_, r) => (
-        <Radio.Group
-          value={passedByKey[r.key] === undefined ? undefined : passedByKey[r.key] ? 'pass' : 'fail'}
-          onChange={(e) => setPassed(r.key, e.target.value === 'pass')}
-        >
-          <Radio value="pass">Đạt</Radio>
-          <Radio value="fail">Không đạt</Radio>
-        </Radio.Group>
-      ),
+      width: 280,
+      render: (_, r) =>
+        r.subchecks?.length ? (
+          <Space direction="vertical" size="small" style={{ width: '100%' }}>
+            {r.subchecks.map((sc) => (
+              <div key={sc.key}>
+                <Typography.Text style={{ display: 'block', marginBottom: 4 }}>{sc.label}</Typography.Text>
+                <Radio.Group
+                  size="small"
+                  value={
+                    subPassedByKey[subStateKey(r.key, sc.key)] === undefined
+                      ? undefined
+                      : subPassedByKey[subStateKey(r.key, sc.key)]
+                        ? 'pass'
+                        : 'fail'
+                  }
+                  onChange={(e) => setSubPassed(r.key, sc.key, e.target.value === 'pass')}
+                >
+                  <Radio value="pass">Đạt</Radio>
+                  <Radio value="fail">Không</Radio>
+                </Radio.Group>
+              </div>
+            ))}
+          </Space>
+        ) : (
+          <Radio.Group
+            value={passedByKey[r.key] === undefined ? undefined : passedByKey[r.key] ? 'pass' : 'fail'}
+            onChange={(e) => setPassed(r.key, e.target.value === 'pass')}
+          >
+            <Radio value="pass">Đạt</Radio>
+            <Radio value="fail">Không</Radio>
+          </Radio.Group>
+        ),
     },
     {
       title: 'Ghi chú',
@@ -466,6 +538,7 @@ export default function ChecklistFormPage() {
               if (!checklistKey) return
               localStorage.removeItem(draftStorageKey(checklistKey, checkDate))
               setPassedByKey({})
+              setSubPassedByKey({})
               setNoteByKey({})
               setInvalidItemKey(null)
               setHasTriedSubmit(false)
@@ -512,8 +585,9 @@ export default function ChecklistFormPage() {
               dataSource={block.data}
               bordered
               rowClassName={(r) => {
-                const isMissingStatus = hasTriedSubmit && passedByKey[r.key] === undefined
-                const isFail = passedByKey[r.key] === false
+                const st = resolveItemStatus(r)
+                const isMissingStatus = hasTriedSubmit && st === undefined
+                const isFail = st === false
                 const isInvalid = invalidItemKey === r.key
                 if (isInvalid || isMissingStatus) return 'row-invalid'
                 if (isFail) return 'row-fail'
@@ -536,14 +610,16 @@ export default function ChecklistFormPage() {
                   children: (
                     <Space direction="vertical" style={{ width: '100%' }} size="small">
                       {block.data.map((r) => {
-                        const isFail = passedByKey[r.key] === false
+                        const st = resolveItemStatus(r)
+                        const isFail = st === false
+                        const isMissing = hasTriedSubmit && st === undefined
                         return (
                           <Card
                             key={r.key}
                             id={`check-item-${r.key}`}
                             size="small"
                             style={{
-                              borderColor: invalidItemKey === r.key || (hasTriedSubmit && passedByKey[r.key] === undefined) ? '#ff4d4f' : isFail ? '#ff4d4f' : '#f0f0f0',
+                              borderColor: invalidItemKey === r.key || isMissing ? '#ff4d4f' : isFail ? '#ff4d4f' : '#f0f0f0',
                               background: invalidItemKey === r.key || isFail ? '#fff2f0' : '#fff',
                             }}
                           >
@@ -551,24 +627,50 @@ export default function ChecklistFormPage() {
                               <Typography.Text strong>{r.label}</Typography.Text>
                               <Typography.Text type="secondary">{r.standard}</Typography.Text>
                               {r.subchecks?.length ? (
-                                <Typography.Text type="secondary">
-                                  Chi tiết: {r.subchecks.map((s) => s.label).join('; ')}
-                                </Typography.Text>
-                              ) : null}
-                              <Radio.Group
-                                optionType="button"
-                                buttonStyle="solid"
-                                style={{ display: 'flex', width: '100%' }}
-                                value={passedByKey[r.key] === undefined ? undefined : passedByKey[r.key] ? 'pass' : 'fail'}
-                                onChange={(e) => setPassed(r.key, e.target.value === 'pass')}
-                              >
-                                <Radio style={{ flex: 1, textAlign: 'center' }} value="pass">
-                                  Đạt
-                                </Radio>
-                                <Radio style={{ flex: 1, textAlign: 'center' }} value="fail">
-                                  Không đạt
-                                </Radio>
-                              </Radio.Group>
+                                <Space direction="vertical" style={{ width: '100%' }} size={6}>
+                                  <Typography.Text type="secondary">Kiểm tra từng ổ / mục:</Typography.Text>
+                                  {r.subchecks.map((sc) => (
+                                    <div key={sc.key}>
+                                      <Typography.Text style={{ display: 'block', marginBottom: 4 }}>{sc.label}</Typography.Text>
+                                      <Radio.Group
+                                        optionType="button"
+                                        buttonStyle="solid"
+                                        style={{ display: 'flex', width: '100%' }}
+                                        value={
+                                          subPassedByKey[subStateKey(r.key, sc.key)] === undefined
+                                            ? undefined
+                                            : subPassedByKey[subStateKey(r.key, sc.key)]
+                                              ? 'pass'
+                                              : 'fail'
+                                        }
+                                        onChange={(e) => setSubPassed(r.key, sc.key, e.target.value === 'pass')}
+                                      >
+                                        <Radio style={{ flex: 1, textAlign: 'center' }} value="pass">
+                                          Đạt
+                                        </Radio>
+                                        <Radio style={{ flex: 1, textAlign: 'center' }} value="fail">
+                                          Không
+                                        </Radio>
+                                      </Radio.Group>
+                                    </div>
+                                  ))}
+                                </Space>
+                              ) : (
+                                <Radio.Group
+                                  optionType="button"
+                                  buttonStyle="solid"
+                                  style={{ display: 'flex', width: '100%' }}
+                                  value={passedByKey[r.key] === undefined ? undefined : passedByKey[r.key] ? 'pass' : 'fail'}
+                                  onChange={(e) => setPassed(r.key, e.target.value === 'pass')}
+                                >
+                                  <Radio style={{ flex: 1, textAlign: 'center' }} value="pass">
+                                    Đạt
+                                  </Radio>
+                                  <Radio style={{ flex: 1, textAlign: 'center' }} value="fail">
+                                    Không
+                                  </Radio>
+                                </Radio.Group>
+                              )}
                               <Input.TextArea
                                 id={`check-note-${r.key}`}
                                 autoSize={{ minRows: 2, maxRows: 4 }}
