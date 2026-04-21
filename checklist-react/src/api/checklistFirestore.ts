@@ -13,7 +13,7 @@ import {
 } from 'firebase/firestore'
 import { CHECKLIST_ALL, findChecklist, flattenItems } from '../catalog'
 import type { ChecklistDefinition } from '../catalog/types'
-import { getDb } from '../lib/firebase'
+import { ensureFirebaseAnonymousUser, getDb, getFirebaseAuth } from '../lib/firebase'
 import { requestChecklistEmailNotification } from './notifyResend'
 import type {
   ChecklistEmailNotificationPayload,
@@ -165,6 +165,13 @@ export async function submitChecklist(
   body: SubmitChecklistRequest,
   onProgress?: (phase: 'save' | 'email') => void,
 ): Promise<SubmitChecklistResponse> {
+  await ensureFirebaseAnonymousUser()
+  if (!getFirebaseAuth().currentUser) {
+    throw new Error(
+      'Chưa đăng nhập Firebase (ẩn danh). Vào Firebase Console → Authentication → Sign-in method → bật Anonymous; Authorized domains thêm domain site (và localhost khi dev).',
+    )
+  }
+
   const def = findChecklist(body.checklistKey)
   if (!def) throw new Error(`Checklist không tồn tại: ${body.checklistKey}`)
 
