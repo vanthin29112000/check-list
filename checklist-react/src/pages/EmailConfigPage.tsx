@@ -1,7 +1,12 @@
 import { useEffect, useState, type Dispatch, type SetStateAction } from 'react'
-import { Button, Card, Input, Space, Tabs, Typography, message } from 'antd'
-import { DeleteOutlined, PlusOutlined, SaveOutlined } from '@ant-design/icons'
-import { fetchEmailRecipientsConfig, saveEmailRecipientsConfig } from '../api/client'
+import { Alert, Button, Card, Input, Space, Tabs, Typography, message } from 'antd'
+import { DeleteOutlined, MailOutlined, PlusOutlined, SaveOutlined } from '@ant-design/icons'
+import {
+  fetchEmailRecipientsConfig,
+  saveEmailRecipientsConfig,
+  sendTestChecklistEmail,
+} from '../api/client'
+import { fetchEmailConfigFromEnv } from '../api/emailConfigFromEnv'
 import type { EmailRecipientRow } from '../api/types'
 
 function RecipientEditor({
@@ -57,15 +62,27 @@ function RecipientEditor({
 export default function EmailConfigPage() {
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
+  const [testing, setTesting] = useState(false)
+  const [syncing, setSyncing] = useState(false)
   const [leaders, setLeaders] = useState<EmailRecipientRow[]>([])
   const [hrStaff, setHrStaff] = useState<EmailRecipientRow[]>([])
 
   useEffect(() => {
     void (async () => {
       try {
-        const c = await fetchEmailRecipientsConfig()
-        setLeaders(c.leaders)
-        setHrStaff(c.hrStaff)
+        const recipients = await fetchEmailRecipientsConfig()
+        setLeaders(recipients.leaders)
+        setHrStaff(recipients.hrStaff)
+        const noLeaders = recipients.leaders.every((x) => !x.email.trim())
+        if (noLeaders) {
+          try {
+            const fromEnv = await fetchEmailConfigFromEnv()
+            if (fromEnv.leaders.length > 0) setLeaders(fromEnv.leaders)
+            if (fromEnv.hrStaff.length > 0) setHrStaff(fromEnv.hrStaff)
+          } catch {
+            /* .env server chưa sẵn sàng */
+          }
+        }
       } catch (e) {
         message.error(e instanceof Error ? e.message : 'Không tải được cấu hình.')
       } finally {
@@ -74,14 +91,36 @@ export default function EmailConfigPage() {
     })()
   }, [])
 
-  async function save() {
+  async function persistRecipients(leadersRows: EmailRecipientRow[], hrRows: EmailRecipientRow[]) {
+    await saveEmailRecipientsConfig({
+      leaders: leadersRows
+        .map((x) => ({ displayName: x.displayName.trim(), email: x.email.trim() }))
+        .filter((x) => x.email.length > 0),
+      hrStaff: hrRows
+        .map((x) => ({ displayName: x.displayName.trim(), email: x.email.trim() }))
+        .filter((x) => x.email.length > 0),
+    })
+  }
+
+  async function syncFromEnv() {
+    setSyncing(true)
+    try {
+      const fromEnv = await fetchEmailConfigFromEnv()
+      if (fromEnv.leaders.length > 0) setLeaders(fromEnv.leaders)
+      if (fromEnv.hrStaff.length > 0) setHrStaff(fromEnv.hrStaff)
+      message.success('Đã lấy danh sách từ .env (LEADER_EMAILS, HR_EMAILS). Bấm Lưu để ghi Firestore.')
+    } catch (e) {
+      message.error(e instanceof Error ? e.message : 'Không đọc được .env server.')
+    } finally {
+      setSyncing(false)
+    }
+  }
+
+  async function saveAll() {
     setSaving(true)
     try {
-      await saveEmailRecipientsConfig({
-        leaders: leaders.map((x) => ({ displayName: x.displayName.trim(), email: x.email.trim() })).filter((x) => x.email.length > 0),
-        hrStaff: hrStaff.map((x) => ({ displayName: x.displayName.trim(), email: x.email.trim() })).filter((x) => x.email.length > 0),
-      })
-      message.success('Đã lưu cấu hình email.')
+      await persistRecipients(leaders, hrStaff)
+      message.success('Đã lưu cấu hình người nhận.')
     } catch (e) {
       message.error(e instanceof Error ? e.message : 'Lưu thất bại.')
     } finally {
@@ -89,14 +128,28 @@ export default function EmailConfigPage() {
     }
   }
 
+  async function sendTest() {
+    setTesting(true)
+    try {
+      await persistRecipients(leaders, hrStaff)
+      await sendTestChecklistEmail()
+      message.success('Đã gửi mail thử tới lãnh đạo. Kiểm tra hộp thư (và spam).')
+    } catch (e) {
+      message.error(e instanceof Error ? e.message : 'Gửi mail thử thất bại.')
+    } finally {
+      setTesting(false)
+    }
+  }
+
   return (
     <Card loading={loading} title="Cấu hình email thông báo checklist">
-      <Typography.Paragraph>
-        Danh sách lưu trên Firestore (<code>appSettings/emailRecipients</code>). <strong>Lãnh đạo</strong> nhận mail có
-        link duyệt và dashboard. <strong>Nhân sự</strong>: khi ai đó nộp checklist, nếu ô Họ tên trên form trùng (không
-        phân biệt hoa thường) với một dòng ở đây, email tương ứng nhận bản <em>thông báo</em> (tóm tắt + link dashboard),
-        <em>không</em> có link duyệt. Điền email rồi bấm Lưu. Lần đầu mở trang, hệ thống gợi ý sẵn họ tên.
-      </Typography.Paragraph>
+      <Alert
+        type="info"
+        showIcon
+        style={{ marginBottom: 16 }}
+        message="Máy chủ gửi mail (SMTP / Resend)"
+        description="Cấu hình trong file .env ở gốc repo (SMTP_HOST, SMTP_USER, SMTP_PASS hoặc RESEND_API_KEY, PUBLIC_BASE_URL). Restart npm run dev sau khi sửa .env."
+      />
       <Tabs
         items={[
           {
@@ -106,7 +159,7 @@ export default function EmailConfigPage() {
               <RecipientEditor
                 rows={leaders}
                 setRows={setLeaders}
-                hint="Ví dụ: Nguyễn Hoàng Bảo Trung — nhận mail có link duyệt và dashboard."
+                hint="Nhận email có link duyệt checklist. Có thể đồng bộ từ LEADER_EMAILS trong .env."
               />
             ),
           },
@@ -117,15 +170,23 @@ export default function EmailConfigPage() {
               <RecipientEditor
                 rows={hrStaff}
                 setRows={setHrStaff}
-                hint="Họ tên phải khớp ô Họ tên lúc nộp checklist — nhận mail thông báo (không link duyệt)."
+                hint="Gán quyền quản lý khi đăng nhập lần đầu — không nhận mail duyệt (chỉ lãnh đạo/quản lý đã đăng nhập)."
               />
             ),
           },
         ]}
       />
-      <Button type="primary" icon={<SaveOutlined />} loading={saving} onClick={() => void save()} style={{ marginTop: 24 }}>
-        Lưu cấu hình
-      </Button>
+      <Space style={{ marginTop: 24 }} wrap>
+        <Button loading={syncing} onClick={() => void syncFromEnv()}>
+          Nhập từ .env (server)
+        </Button>
+        <Button type="primary" icon={<SaveOutlined />} loading={saving} onClick={() => void saveAll()}>
+          Lưu cấu hình
+        </Button>
+        <Button icon={<MailOutlined />} loading={testing} onClick={() => void sendTest()}>
+          Gửi mail thử
+        </Button>
+      </Space>
     </Card>
   )
 }

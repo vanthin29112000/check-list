@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Button, Card, Col, DatePicker, Drawer, Grid, Row, Select, Space, Statistic, Table, Tag, Typography } from 'antd'
 import dayjs from 'dayjs'
+import { Link } from 'react-router-dom'
 import { fetchDashboard, fetchDefinitions } from '../api/client'
 import type {
   ChecklistDefinition,
@@ -8,10 +9,12 @@ import type {
   DashboardResponse,
   DashboardTopFailedItem,
 } from '../api/types'
+import { useAuth } from '../auth/AuthContext'
 
 export default function DashboardPage() {
   const { md } = Grid.useBreakpoint()
   const isMobile = !md
+  const { isManager } = useAuth()
   const urgentRef = useRef<HTMLDivElement | null>(null)
   const [catalog, setCatalog] = useState<ChecklistDefinition[]>([])
   const [checklistKey, setChecklistKey] = useState<string | undefined>()
@@ -197,6 +200,7 @@ export default function DashboardPage() {
         </Space>
       </Card>
 
+      {isManager && (
       <Card title="Chờ duyệt (xử lý ngay)">
         <Space direction="vertical" style={{ width: '100%' }} size="small">
           {pendingApprovals.slice(0, 10).map((r) => (
@@ -207,18 +211,21 @@ export default function DashboardPage() {
                 <Typography.Text style={{ color: '#dc2626' }}>⚠️ {r.totalErrors} lỗi</Typography.Text>
                 <Typography.Text type="secondary">📅 {dayjs(r.checkDate).format('DD/MM/YYYY')}</Typography.Text>
                 <Space>
-                  <Button type="primary" size="small" onClick={() => window.open(r.approvalLink, '_blank')}>
-                    Duyệt
-                  </Button>
-                  <Button size="small" onClick={() => window.open(r.approvalLink, '_blank')}>
-                    Xem
-                  </Button>
+                  <Link to={`/submission/${r.id}`}>
+                    <Button size="small">Xem</Button>
+                  </Link>
+                  <Link to={`/approve?token=${encodeURIComponent(r.approvalToken)}`}>
+                    <Button type="primary" size="small">
+                      Duyệt
+                    </Button>
+                  </Link>
                 </Space>
               </Space>
             </Card>
           ))}
         </Space>
       </Card>
+      )}
 
       <Card title="Theo người kiểm tra">
         <Space direction="vertical" size="small" style={{ width: '100%' }}>
@@ -255,7 +262,7 @@ export default function DashboardPage() {
         </Space>
       </Card>
 
-      {!isMobile && (
+      {!isMobile && isManager && (
         <Card title="Bảng chi tiết desktop">
           <Row gutter={[12, 12]}>
             <Col xs={24} lg={12}>
@@ -287,6 +294,23 @@ export default function DashboardPage() {
                     render: (n: number) => (n > 0 ? <Tag color="red">{n}</Tag> : <Tag color="green">0</Tag>),
                   },
                   { title: 'Ngày', dataIndex: 'checkDate', width: 90, render: (v: string) => dayjs(v).format('DD/MM/YYYY') },
+                  {
+                    title: 'Thao tác',
+                    key: 'actions',
+                    width: 160,
+                    render: (_, r) => (
+                      <Space>
+                        <Link to={`/submission/${r.id}`}>
+                          <Button size="small">Xem</Button>
+                        </Link>
+                        <Link to={`/approve?token=${encodeURIComponent(r.approvalToken)}`}>
+                          <Button type="primary" size="small">
+                            Duyệt
+                          </Button>
+                        </Link>
+                      </Space>
+                    ),
+                  },
                 ]}
               />
             </Col>

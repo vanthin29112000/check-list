@@ -16,7 +16,11 @@
   node_bundler = "esbuild"
   external_node_modules = ["pdfkit", "fontkit", "crypto-js", "jpeg-exif", "linebreak", "png-js"]
 
-# Chạy local một lệnh: từ gốc repo `npm run dev` (cần netlify-cli). App: http://localhost:8888
+# Chạy local: từ gốc repo `npm install` rồi `npm run dev` → mở http://localhost:8888
+# (chạy song song Netlify Functions :8888 + Vite :5173; cần điền VITE_FIREBASE_* trong checklist-react/.env)
 [dev]
-  command = "npm run dev --prefix checklist-react"
+  framework = "#custom"
+  command = "node scripts/dev-web.mjs"
   targetPort = 5173
+  port = 8888
+  pollingStrategies = ["HTTP"]

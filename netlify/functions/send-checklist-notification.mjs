@@ -1,5 +1,6 @@
 import nodemailer from 'nodemailer'
 import { buildChecklistPdfBase64 } from './buildChecklistPdf.mjs'
+import { getAdminDb, loadApprovalRecipientEmails } from './firebase-admin-shared.mjs'
 
 function parseOrigins() {
   return (process.env.CORS_ORIGINS || '')
@@ -289,36 +290,122 @@ function buildChecklistEmailHtml(data, options) {
   `
 }
 
-function hasSmtpConfig() {
-  return Boolean(
-    process.env.SMTP_HOST?.trim() && process.env.SMTP_USER?.trim() && process.env.SMTP_PASS?.trim(),
-  )
+function hasSmtpConfig(cfg) {
+  return Boolean(cfg?.host?.trim() && cfg?.user?.trim() && cfg?.pass?.trim())
 }
 
-function hasResendConfig() {
-  return Boolean(process.env.RESEND_API_KEY?.trim())
+function hasResendConfig(cfg) {
+  return Boolean(cfg?.apiKey?.trim())
 }
 
-function createSmtpTransport() {
-  const host = process.env.SMTP_HOST?.trim()
-  const user = process.env.SMTP_USER?.trim()
-  const pass = process.env.SMTP_PASS?.trim()
+/** @param {{ host: string, port: number, secure: boolean, user: string, pass: string }} cfg */
+function createSmtpTransport(cfg) {
+  const host = cfg.host?.trim()
+  const user = cfg.user?.trim()
+  const pass = cfg.pass?.trim()
   if (!host || !user || !pass) {
-    throw new Error(
-      'Thiếu cấu hình SMTP: đặt SMTP_HOST, SMTP_USER, SMTP_PASS trong .env (gốc repo) hoặc Netlify environment.',
-    )
+    throw new Error('Thiếu cấu hình SMTP: Host, User hoặc Mật khẩu.')
   }
-  const port = Number(process.env.SMTP_PORT || '587')
-  const secure =
-    process.env.SMTP_SECURE === 'true' ||
-    process.env.SMTP_SECURE === '1' ||
-    port === 465
+  const port = Number(cfg.port || 587)
+  const secure = Boolean(cfg.secure) || port === 465
   return nodemailer.createTransport({
     host,
     port,
     secure,
     auth: { user, pass },
   })
+}
+
+function parseEmailListFromEnv(raw) {
+  if (!raw?.trim()) return []
+  const seen = new Set()
+  const out = []
+  for (const part of raw.split(',')) {
+    const e = part.trim().replace(/^["']|["']$/g, '')
+    if (!e.includes('@')) continue
+    const k = e.toLowerCase()
+    if (seen.has(k)) continue
+    seen.add(k)
+    out.push(e)
+  }
+  return out
+}
+
+function leaderEmailsFromEnv() {
+  return parseEmailListFromEnv(process.env.LEADER_EMAILS)
+}
+
+/** Thông báo lỗi SMTP/Resend dễ hiểu hơn message thô từ server mail. */
+function friendlyMailError(msg) {
+  const s = String(msg ?? '')
+  if (s.includes('SmtpClientAuthentication is disabled') || s.includes('smtp_auth_disabled')) {
+    return (
+      'Office 365 chưa bật SMTP AUTH cho hộp thư này. ' +
+      'Admin Microsoft 365 → Users → chọn user → Mail → Manage email apps → bật Authenticated SMTP. ' +
+      'Hoặc dùng RESEND_API_KEY trong .env thay SMTP.'
+    )
+  }
+  if (/Invalid login|535\s+5\.7/i.test(s)) {
+    return `SMTP từ chối đăng nhập — kiểm tra SMTP_USER/SMTP_PASS trong .env hoặc bật SMTP AUTH (Office 365). Chi tiết: ${s}`
+  }
+  if (/ETIMEDOUT|ECONNREFUSED|ENOTFOUND/i.test(s)) {
+    return `Không kết nối được máy chủ SMTP (${process.env.SMTP_HOST || 'SMTP_HOST'}). Kiểm tra mạng và SMTP_HOST/SMTP_PORT.`
+  }
+  return s
+}
+
+function smtpFromEnv() {
+  const host = process.env.SMTP_HOST?.trim()
+  const user = process.env.SMTP_USER?.trim()
+  const pass = process.env.SMTP_PASS?.trim()
+  if (!host || !user || !pass) return null
+  const port = Number(process.env.SMTP_PORT || '587')
+  const secure =
+    process.env.SMTP_SECURE === 'true' ||
+    process.env.SMTP_SECURE === '1' ||
+    port === 465
+  return {
+    host,
+    port,
+    secure,
+    user,
+    pass,
+    from: process.env.SMTP_FROM?.trim() || (user ? `Checklist <${user}>` : 'Checklist'),
+  }
+}
+
+function resendFromEnv() {
+  const apiKey = process.env.RESEND_API_KEY?.trim()
+  if (!apiKey) return null
+  return {
+    apiKey,
+    from: process.env.RESEND_FROM?.trim() || 'Checklist <onboarding@resend.dev>',
+  }
+}
+
+/** Cấu hình gửi mail chỉ từ biến môi trường (.env). */
+async function resolveMailRuntime() {
+  let publicBaseUrl = (process.env.PUBLIC_BASE_URL || '').replace(/\/$/, '')
+  let useSmtp = false
+  let useResend = false
+  /** @type {{ host: string, port: number, secure: boolean, user: string, pass: string, from: string } | null} */
+  let smtp = null
+  /** @type {{ apiKey: string, from: string } | null} */
+  let resend = null
+
+  const envSmtp = smtpFromEnv()
+  if (envSmtp) {
+    useSmtp = true
+    smtp = envSmtp
+  } else {
+    const envResend = resendFromEnv()
+    if (envResend) {
+      useResend = true
+      resend = envResend
+    }
+  }
+
+  return { useSmtp, useResend, smtp, resend, publicBaseUrl }
 }
 
 /**
@@ -329,9 +416,9 @@ function createSmtpTransport() {
  * @param {string} html
  * @param {{ filename: string, content: string }[] | null} attachments — content đã là base64
  */
-async function sendViaResend(from, to, subject, text, html, attachments) {
-  const key = process.env.RESEND_API_KEY?.trim()
-  if (!key) throw new Error('Thiếu RESEND_API_KEY')
+async function sendViaResend(from, to, subject, text, html, attachments, apiKey) {
+  const key = apiKey?.trim()
+  if (!key) throw new Error('Thiếu Resend API key')
   /** @type {Record<string, unknown>} */
   const payload = {
     from,
@@ -452,46 +539,51 @@ export const handler = async (event) => {
       return { statusCode: 400, headers, body: JSON.stringify({ error: m }) }
     }
 
-    const useSmtp = hasSmtpConfig()
-    const useResend = !useSmtp && hasResendConfig()
+    const mailRuntime = await resolveMailRuntime()
+    const { useSmtp, useResend, smtp, resend, publicBaseUrl } = mailRuntime
+
     if (!useSmtp && !useResend) {
+      const hasPartialSmtp =
+        process.env.SMTP_HOST?.trim() &&
+        process.env.SMTP_USER?.trim() &&
+        !process.env.SMTP_PASS?.trim()
+      let error =
+        'Chưa cấu hình gửi mail. Đặt SMTP_HOST, SMTP_USER, SMTP_PASS (hoặc RESEND_API_KEY) trong file .env gốc repo, rồi restart npm run dev.'
+      if (hasPartialSmtp) {
+        error = 'Thiếu SMTP_PASS trong file .env gốc repo.'
+      }
       return {
         statusCode: 501,
         headers,
-        body: JSON.stringify({
-          error:
-            'Thiếu cấu hình gửi mail: đặt (1) SMTP_HOST + SMTP_USER + SMTP_PASS hoặc (2) RESEND_API_KEY và RESEND_FROM (ví dụ Checklist <onboarding@resend.dev>) trên .env gốc repo / Netlify.',
-        }),
+        body: JSON.stringify({ error }),
       }
     }
 
     /** @type {import('nodemailer').Transporter | null} */
     let transporter = null
-    if (useSmtp) {
+    if (useSmtp && smtp) {
       try {
-        transporter = createSmtpTransport()
+        transporter = createSmtpTransport(smtp)
       } catch (cfgErr) {
         const msg = cfgErr instanceof Error ? cfgErr.message : String(cfgErr)
         return { statusCode: 501, headers, body: JSON.stringify({ error: msg }) }
       }
     }
 
-    const publicBase = (process.env.PUBLIC_BASE_URL || '').replace(/\/$/, '')
+    const publicBase = publicBaseUrl
     if (!publicBase) {
       return {
         statusCode: 500,
         headers,
         body: JSON.stringify({
           error:
-            'Thiếu PUBLIC_BASE_URL (ví dụ http://localhost:8888 khi netlify dev, hoặc https://<site>.netlify.app trên production).',
+            'Thiếu PUBLIC_BASE_URL trong file .env gốc repo (vd. http://localhost:8888 hoặc https://site.netlify.app).',
         }),
       }
     }
 
-    const smtpUser = process.env.SMTP_USER?.trim() || ''
-    const fromHeader = useSmtp
-      ? process.env.SMTP_FROM?.trim() || (smtpUser ? `Checklist <${smtpUser}>` : 'Checklist')
-      : process.env.RESEND_FROM?.trim() || 'Checklist <onboarding@resend.dev>'
+    const fromHeader = useSmtp && smtp ? smtp.from : resend?.from || 'Checklist <onboarding@resend.dev>'
+    const resendApiKey = resend?.apiKey || ''
 
     const approveUrl = `${publicBase}/approve?token=${encodeURIComponent(data.approvalToken)}`
     const dashboardUrl = `${publicBase}/dashboard`
@@ -504,15 +596,26 @@ export const handler = async (event) => {
     const subjectSubmitter = `[Checklist] Kết quả — ${data.checklistTitle} — ${data.submitterName}`
 
     const toSubmitter = String(data.submitterEmail || '').trim()
-    const managers = parseRecipientEmailsFromBody(body)
-    const staffNotify = parseStaffNotifyEmailsFromBody(body)
+    let managers = parseRecipientEmailsFromBody(body)
+    if (managers.length === 0) {
+      managers = leaderEmailsFromEnv()
+    }
+    if (managers.length === 0 && body.useManagerRecipients === true) {
+      try {
+        const db = getAdminDb()
+        managers = await loadApprovalRecipientEmails(db)
+      } catch (adminErr) {
+        // eslint-disable-next-line no-console
+        console.error('loadApprovalRecipientEmails', adminErr)
+      }
+    }
     if (managers.length === 0) {
       return {
         statusCode: 400,
         headers,
         body: JSON.stringify({
           error:
-            'Thiếu recipientEmails (tab Lãnh đạo). Ứng dụng phải gửi ít nhất một email lãnh đạo từ Manager → Cấu hình email. Nhân sự trùng tên gửi qua staffNotifyEmails (không có link duyệt).',
+            'Chưa có người nhận mail duyệt. Điền LEADER_EMAILS trong .env hoặc tab Lãnh đạo trên Cấu hình email.',
         }),
       }
     }
@@ -546,7 +649,7 @@ export const handler = async (event) => {
 
     const sendOne = async (to, subj, txt, html, attachments = pdfAttachments) => {
       if (useResend) {
-        await sendViaResend(fromHeader, to, subj, txt, html, attachments)
+        await sendViaResend(fromHeader, to, subj, txt, html, attachments, resendApiKey)
         return
       }
       /** @type {import('nodemailer/lib/mailer').Options} */
@@ -596,32 +699,6 @@ export const handler = async (event) => {
       }
     }
 
-    for (const staffTo of staffNotify) {
-      const sl = staffTo.toLowerCase()
-      if (toSubmitter && sl === submitterLower) continue
-      if (managerLower.has(sl)) continue
-      const alert = totalErrors > threshold
-      const subjStaff = alert
-        ? `[CẢNH BÁO] Thông báo checklist — ${data.checklistTitle} — ${totalErrors} lỗi`
-        : `[Thông báo] ${data.checklistTitle} — ${data.submitterName}`
-      const bodyStaff = alert
-        ? `Cảnh báo: checklist vượt ngưỡng lỗi (${threshold}).\n\n${staffNotifyMailText}`
-        : staffNotifyMailText
-      const htmlStaff = alert
-        ? buildChecklistEmailHtml(data, {
-            approveUrl: null,
-            dashboardUrl,
-            alertText: `Checklist vượt ngưỡng lỗi (${threshold}).`,
-          })
-        : staffNotifyMailHtml
-      try {
-        await sendOne(staffTo, subjStaff, bodyStaff, htmlStaff)
-      } catch (e) {
-        // eslint-disable-next-line no-console
-        console.error('staff notify mail failed', staffTo, e)
-      }
-    }
-
     return {
       statusCode: 200,
       headers,
@@ -632,9 +709,14 @@ export const handler = async (event) => {
       }),
     }
   } catch (e) {
-    const msg = e instanceof Error ? e.message : String(e)
+    const msg = friendlyMailError(e instanceof Error ? e.message : String(e))
     // eslint-disable-next-line no-console
     console.error('send-checklist-notification', e)
-    return { statusCode: 500, headers: corsHeaders(origin), body: JSON.stringify({ error: msg }) }
+    const isMailErr = /SMTP|Resend|login|535|mail/i.test(msg)
+    return {
+      statusCode: isMailErr ? 502 : 500,
+      headers: corsHeaders(origin),
+      body: JSON.stringify({ error: msg }),
+    }
   }
 }
