@@ -2,12 +2,16 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { Button, Card, DatePicker, Grid, Progress, Segmented, Select, Space, Table, Tag, Typography, notification } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
 import dayjs, { Dayjs } from 'dayjs'
+import { Link } from 'react-router-dom'
 import { downloadChecklistPdf, fetchDailyStatus, fetchDefinitions, fetchHistory, resendChecklistEmail } from '../api/client'
 import type { ChecklistDefinition, DailyStatusChecklist, DailyStatusRow, HistoryRow } from '../api/types'
+import { useAuth } from '../auth/AuthContext'
+import { SubmissionDetailView } from '../components/SubmissionDetailView'
 
 export default function HistoryPage() {
   const { md } = Grid.useBreakpoint()
   const isMobile = !md
+  const { isManager } = useAuth()
   const todayCardRef = useRef<HTMLDivElement | null>(null)
   const [catalog, setCatalog] = useState<ChecklistDefinition[]>([])
   const [checklistKey, setChecklistKey] = useState<string | undefined>()
@@ -68,7 +72,8 @@ export default function HistoryPage() {
     return () => window.clearTimeout(t)
   }, [month, isMobile, mobileScheduleView])
 
-  const columns: ColumnsType<HistoryRow> = [
+  const columns: ColumnsType<HistoryRow> = useMemo(() => {
+    const base: ColumnsType<HistoryRow> = [
     {
       title: 'Ngày kiểm tra',
       dataIndex: 'checkDate',
@@ -117,101 +122,74 @@ export default function HistoryPage() {
         </Button>
       ),
     },
+    ...(isManager
+      ? [
+          {
+            title: 'Mail',
+            key: 'resendMail',
+            width: 130,
+            render: (_: unknown, r: HistoryRow) => (
+              <Button
+                size="small"
+                onClick={async () => {
+                  try {
+                    const out = await resendChecklistEmail(r.id)
+                    if (out.skipped) {
+                      notiApi.error({
+                        message: 'Gửi lại mail thất bại',
+                        description: out.message,
+                        placement: 'topRight',
+                      })
+                    } else {
+                      notiApi.success({
+                        message: 'Gửi lại mail thành công',
+                        description: `Checklist "${r.checklistTitle}" đã được gửi lại email.`,
+                        placement: 'topRight',
+                      })
+                    }
+                  } catch (e) {
+                    const ax = e as { response?: { data?: { error?: string } }; message?: string }
+                    notiApi.error({
+                      message: 'Gửi lại mail thất bại',
+                      description: ax.response?.data?.error ?? ax.message ?? 'Không thể gửi lại email checklist.',
+                      placement: 'topRight',
+                    })
+                  }
+                }}
+              >
+                Gửi lại mail
+              </Button>
+            ),
+          } as const,
+        ]
+      : []),
     {
-      title: 'Mail',
-      key: 'resendMail',
-      width: 130,
+      title: 'Thao tác',
+      key: 'actions',
+      width: 200,
       render: (_, r) => (
-        <Button
-          size="small"
-          onClick={async () => {
-            try {
-              const out = await resendChecklistEmail(r.id)
-              if (out.skipped) {
-                notiApi.error({
-                  message: 'Gửi lại mail thất bại',
-                  description: out.message,
-                  placement: 'topRight',
-                })
-              } else {
-                notiApi.success({
-                  message: 'Gửi lại mail thành công',
-                  description: `Checklist "${r.checklistTitle}" đã được gửi lại email.`,
-                  placement: 'topRight',
-                })
-              }
-            } catch (e) {
-              const ax = e as { response?: { data?: { error?: string } }; message?: string }
-              notiApi.error({
-                message: 'Gửi lại mail thất bại',
-                description: ax.response?.data?.error ?? ax.message ?? 'Không thể gửi lại email checklist.',
-                placement: 'topRight',
-              })
-            }
-          }}
-        >
-          Gửi lại mail
-        </Button>
+        <Space wrap>
+          <Link to={`/submission/${r.id}`}>
+            <Button size="small">Xem</Button>
+          </Link>
+          {isManager && !r.isApproved && r.approvalToken ? (
+            <Link to={`/approve?token=${encodeURIComponent(r.approvalToken)}`}>
+              <Button type="primary" size="small">
+                Duyệt
+              </Button>
+            </Link>
+          ) : r.isApproved ? (
+            <Tag color="green">Đã duyệt</Tag>
+          ) : null}
+        </Space>
       ),
     },
-    {
-      title: 'Duyệt',
-      key: 'approve',
-      width: 120,
-      render: (_, r) => (
-        r.isApproved ? <Tag color="green">Đã duyệt</Tag> : <Tag color="gold">Chờ duyệt</Tag>
-      ),
-    },
-  ]
+    ]
+    return base
+  }, [isManager, notiApi])
 
   function renderChecklistLikeView(row: HistoryRow) {
-    const groups = new Map<string, typeof row.details>()
-    for (const d of row.details) {
-      if (!groups.has(d.groupTitle)) groups.set(d.groupTitle, [])
-      groups.get(d.groupTitle)!.push(d)
-    }
-
-    return (
-      <Space direction="vertical" style={{ width: '100%' }} size="middle">
-        {[...groups.entries()].map(([groupTitle, items]) => (
-          <Card key={groupTitle} size="small" title={groupTitle}>
-            <Table
-              size="small"
-              pagination={false}
-              rowKey="itemKey"
-              dataSource={items}
-              scroll={{ x: 860 }}
-              bordered
-              columns={[
-                {
-                  title: 'Thiết bị',
-                  dataIndex: 'label',
-                  width: '24%',
-                  render: (v: string) => <Typography.Text strong>{v}</Typography.Text>,
-                },
-                {
-                  title: 'Tiêu chuẩn',
-                  dataIndex: 'standard',
-                  width: '42%',
-                },
-                {
-                  title: 'Kiểm tra',
-                  dataIndex: 'passed',
-                  width: '14%',
-                  render: (p: boolean) => (p ? <Tag color="green">Đạt</Tag> : <Tag color="red">Không đạt</Tag>),
-                },
-                {
-                  title: 'Ghi chú',
-                  dataIndex: 'note',
-                  width: '20%',
-                  render: (v: string | null | undefined) => v || '-',
-                },
-              ]}
-            />
-          </Card>
-        ))}
-      </Space>
-    )
+    return <SubmissionDetailView row={row} />
   }
 
   const weekBlocks = useMemo(() => {

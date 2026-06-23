@@ -7,6 +7,12 @@ function sameOriginNotifyUrl(): string {
   return `${window.location.origin}${NOTIFY_PATH}`
 }
 
+export function netlifyFunctionUrl(functionName: string): string | null {
+  const base = notifyUrl()
+  if (!base) return null
+  return base.replace(/\/[^/]+$/, `/${functionName}`)
+}
+
 function notifyUrl(): string | null {
   if (typeof window === 'undefined') return null
   const origin = window.location.origin
@@ -50,12 +56,12 @@ function notifyUrl(): string | null {
 }
 
 const SKIP_NOTIFY_HELP =
-  'Local: (1) `netlify dev` → http://localhost:8888; (2) `VITE_NETLIFY_DEV_PROXY=1` + chạy functions; (3) `VITE_NOTIFY_FUNCTION_URL`. Netlify/.env: SMTP_* hoặc RESEND (không dùng LEADER_EMAILS cho danh sách nhận). Tuỳ chọn: NOTIFY_SHARED_SECRET.'
+  'Local: mở http://localhost:8888 và chạy `npm run dev` (functions + Vite). Cấu hình SMTP/Resend trong file .env gốc repo.'
 
-/** Gọi Netlify Function gửi mail (SMTP/Resend). `recipientEmails` = lãnh đạo (có link duyệt); `staffNotifyEmails` tuỳ chọn = nhân sự trùng tên (không link duyệt). */
+/** Gọi Netlify Function gửi mail (SMTP/Resend từ .env server). */
 export async function requestChecklistEmailNotification(
   notification: ChecklistEmailNotificationPayload,
-  options: { recipientEmails: string[]; staffNotifyEmails?: string[] },
+  options: { useManagerRecipients?: boolean; recipientEmails?: string[] } = {},
 ): Promise<void> {
   const url = notifyUrl()
   if (!url) {
@@ -77,17 +83,14 @@ export async function requestChecklistEmailNotification(
 
   let res: Response
   try {
-    if (!options.recipientEmails.length) {
-      throw new Error('Thiếu recipientEmails (lỗi nội bộ).')
-    }
-    const staffNotifyEmails = (options.staffNotifyEmails ?? []).filter(Boolean)
+    const useManagerRecipients = options.useManagerRecipients ?? !options.recipientEmails?.length
     res = await fetch(url, {
       method: 'POST',
       headers,
       body: JSON.stringify({
         notification,
-        recipientEmails: options.recipientEmails,
-        ...(staffNotifyEmails.length ? { staffNotifyEmails } : {}),
+        useManagerRecipients,
+        ...(options.recipientEmails?.length ? { recipientEmails: options.recipientEmails } : {}),
       }),
     })
   } catch (e) {
@@ -111,18 +114,18 @@ export async function requestChecklistEmailNotification(
         /* giữ body thô (HTML / text từ proxy) */
       }
     }
-    if (!msg) {
+    if (!msg || msg.startsWith('<')) {
       const proxyOn = import.meta.env.VITE_NETLIFY_DEV_PROXY === '1'
-      const onVite =
+      const isLocal =
         typeof window !== 'undefined' &&
-        (window.location.port === '5173' || window.location.port === '') &&
         (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1')
-      const hitLocalFnPath = url.includes('/.netlify/functions/')
-      if (proxyOn && onVite && hitLocalFnPath) {
-        msg = `HTTP ${res.status} (thường do proxy tới 127.0.0.1:8888 lỗi — chưa chạy Netlify Functions). Từ gốc repo chạy \`npm run dev:functions\` hoặc tắt VITE_NETLIFY_DEV_PROXY và đặt VITE_NOTIFY_FUNCTION_URL trỏ function đã deploy.`
+      if (proxyOn && isLocal) {
+        msg = `Không gọi được Netlify Functions (HTTP ${res.status}). Đợi terminal hiện "Local dev server ready" rồi thử lại, hoặc restart npm run dev từ gốc repo.`
       } else {
         msg = `Gửi email thất bại (HTTP ${res.status}${res.statusText ? ` ${res.statusText}` : ''})`
       }
+    } else if (msg === raw && res.status >= 500) {
+      msg = `Gửi email thất bại (HTTP ${res.status}): ${msg}`
     }
     throw new Error(msg)
   }

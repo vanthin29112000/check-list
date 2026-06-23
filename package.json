@@ -2,12 +2,16 @@
   "name": "phan-mem-checklist",
   "private": true,
   "scripts": {
-    "dev": "netlify dev",
-    "dev:functions": "netlify functions:serve --port 8888",
+    "predev": "node scripts/free-dev-ports.mjs",
+    "dev": "concurrently -k -n fn,web -c blue,green \"npm run dev:functions\" \"node scripts/wait-functions.mjs && npm run dev:web\"",
+    "dev:netlify": "netlify dev",
+    "dev:functions": "netlify functions:serve --port 38889",
     "dev:web": "npm run dev --prefix checklist-react",
+    "setup": "npm install --prefix checklist-react && npm install --prefix netlify/functions",
     "clear:checklist-firestore": "npm run clear-checklist-data --prefix functions -- --confirm"
   },
   "devDependencies": {
+    "concurrently": "^10.0.3",
     "netlify-cli": "^22.0.0"
   }
 }

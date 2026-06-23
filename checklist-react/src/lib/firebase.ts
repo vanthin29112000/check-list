@@ -1,5 +1,5 @@
 import { initializeApp, type FirebaseApp } from 'firebase/app'
-import { getAuth, signInAnonymously, type Auth } from 'firebase/auth'
+import { getAuth, type Auth } from 'firebase/auth'
 import { getFirestore, type Firestore } from 'firebase/firestore'
 
 let app: FirebaseApp | undefined
@@ -40,10 +40,15 @@ export function getFirebaseAuth(): Auth {
   return auth
 }
 
-/** Đăng nhập ẩn danh để Firestore rules cho phép đọc/ghi (bật Anonymous trên Firebase Console). */
-export async function ensureFirebaseAnonymousUser(): Promise<void> {
+/** Yêu cầu đã đăng nhập (Microsoft SSO). */
+export async function ensureFirebaseUser(): Promise<void> {
   const a = getFirebaseAuth()
   if (!a.currentUser) {
-    await signInAnonymously(a)
+    throw new Error('Bạn cần đăng nhập Microsoft để tiếp tục.')
   }
+}
+
+/** @deprecated Dùng ensureFirebaseUser sau khi bật Microsoft SSO */
+export async function ensureFirebaseAnonymousUser(): Promise<void> {
+  return ensureFirebaseUser()
 }

@@ -4,17 +4,14 @@ import {
   doc,
   getDoc,
   getDocs,
-  limit,
-  query,
   runTransaction,
   serverTimestamp,
   setDoc,
   updateDoc,
-  where,
 } from 'firebase/firestore'
 import { CHECKLIST_ALL, findChecklist, flattenItems } from '../catalog'
 import type { ChecklistDefinition } from '../catalog/types'
-import { ensureFirebaseAnonymousUser, getDb, getFirebaseAuth } from '../lib/firebase'
+import { ensureFirebaseAnonymousUser, ensureFirebaseUser, getDb, getFirebaseAuth } from '../lib/firebase'
 import { requestChecklistEmailNotification } from './notifyResend'
 import type {
   ChecklistEmailNotificationPayload,
@@ -101,8 +98,48 @@ export async function saveEmailRecipientsConfig(cfg: EmailRecipientsDocument): P
   })
 }
 
+/** Danh sách email lãnh đạo nhận mail duyệt (từ Firestore; server fallback LEADER_EMAILS trong .env). */
+async function buildEmailRecipientOptions(submitterName?: string): Promise<{
+  useManagerRecipients: boolean
+  recipientEmails?: string[]
+}> {
+  const recipientsCfg = await fetchEmailRecipientsConfig()
+
+  let leaderEmails: string[]
+  if (submitterName) {
+    leaderEmails = splitRecipientEmailsForSubmit(recipientsCfg, submitterName).leaderEmails
+  } else {
+    leaderEmails = recipientsCfg.leaders.map((x) => x.email.trim()).filter((e) => e.includes('@'))
+  }
+
+  const seen = new Set<string>()
+  leaderEmails = leaderEmails.filter((e) => {
+    const k = e.toLowerCase()
+    if (seen.has(k)) return false
+    seen.add(k)
+    return true
+  })
+
+  if (leaderEmails.length === 0) {
+    return { useManagerRecipients: true }
+  }
+
+  return { useManagerRecipients: false, recipientEmails: leaderEmails }
+}
+
 function normalizePersonName(s: string): string {
   return s.trim().replace(/\s+/g, ' ').toLowerCase()
+}
+
+export async function ensureManagerUser(): Promise<void> {
+  await ensureFirebaseUser()
+  const uid = getFirebaseAuth().currentUser?.uid
+  if (!uid) throw new Error('Cần đăng nhập quản lý.')
+  const snap = await getDoc(doc(getDb(), 'users', uid))
+  const role = snap.exists() ? String((snap.data() as Record<string, unknown>).role ?? 'staff') : 'staff'
+  if (role !== 'manager' && role !== 'leader') {
+    throw new Error('Chỉ quản lý/lãnh đạo được xem và duyệt checklist.')
+  }
 }
 
 export interface SplitRecipientEmails {
@@ -190,6 +227,10 @@ interface ResultDoc {
   approvedAtUtc: Date | null
   details: ResultDetailDoc[]
   clDocSerial?: number
+  status?: 'pending' | 'approved' | 'rejected'
+  rejectionReason?: string | null
+  approvedByEmail?: string | null
+  approvedByName?: string | null
 }
 
 function resultDocToEmailPayload(r: ResultDoc): ChecklistEmailNotificationPayload {
@@ -235,6 +276,10 @@ function mapDoc(id: string, data: Record<string, unknown>): ResultDoc {
       const n = Number(data.clDocSerial)
       return Number.isFinite(n) && n > 0 ? Math.floor(n) : undefined
     })(),
+    status: (data.status as ResultDoc['status']) ?? (Boolean(data.isApproved) ? 'approved' : 'pending'),
+    rejectionReason: data.rejectionReason != null ? String(data.rejectionReason) : null,
+    approvedByEmail: data.approvedByEmail != null ? String(data.approvedByEmail) : null,
+    approvedByName: data.approvedByName != null ? String(data.approvedByName) : null,
   }
 }
 
@@ -360,6 +405,7 @@ export async function submitChecklist(
     createdAtUtc: Timestamp.fromDate(createdAtUtc),
     approvalToken,
     isApproved: false,
+    status: 'pending',
     approvedAtUtc: null,
     details,
     pdfStoragePath: null as string | null,
@@ -418,14 +464,9 @@ export async function submitChecklist(
     clDocSerial,
   }
   try {
-    const cfg = await fetchEmailRecipientsConfig()
-    const { leaderEmails, staffNotifyEmails } = splitRecipientEmailsForSubmit(cfg, body.submitterName.trim())
-    if (leaderEmails.length === 0) {
-      throw new Error(
-        'Chưa có người nhận mail duyệt: vào Manager → Cấu hình email — điền ít nhất một email trong tab Lãnh đạo. Tab Nhân sự (trùng tên người nộp) chỉ nhận thông báo, không có link duyệt.',
-      )
-    }
-    await requestChecklistEmailNotification(emailPayload, { recipientEmails: leaderEmails, staffNotifyEmails })
+    const mailOpts = await buildEmailRecipientOptions(payload.submitterName)
+    await requestChecklistEmailNotification(emailPayload, mailOpts)
+    await writeAuditLog('submit', { resultId, checklistKey: def.key, submitterEmail: body.submitterEmail })
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e)
     throw new Error(
@@ -479,7 +520,12 @@ function mapHistoryRow(r: ResultDoc): HistoryRow {
     isApproved: r.isApproved,
     approvedAtUtc: r.approvedAtUtc?.toISOString() ?? null,
     approvalLink: buildApprovalLink(r.approvalToken),
+    approvalToken: r.approvalToken,
     ...(r.clDocSerial != null ? { clDocSerial: r.clDocSerial } : {}),
+    status: r.status ?? (r.isApproved ? 'approved' : 'pending'),
+    rejectionReason: r.rejectionReason ?? null,
+    approvedByEmail: r.approvedByEmail ?? null,
+    approvedByName: r.approvedByName ?? null,
     details: orderDetailsForHistory(def, r.details),
   }
 }
@@ -622,6 +668,7 @@ export async function fetchDashboard(params: {
       checkDate: x.checkDate,
       totalErrors: x.totalErrors,
       approvalLink: buildApprovalLink(x.approvalToken),
+      approvalToken: x.approvalToken,
     }))
 
   return {
@@ -744,20 +791,9 @@ export async function resendChecklistEmail(resultId: string): Promise<{ message:
   }
   const r = mapDoc(snap.id, snap.data() as Record<string, unknown>)
   try {
-    const cfg = await fetchEmailRecipientsConfig()
-    const { leaderEmails, staffNotifyEmails } = splitRecipientEmailsForSubmit(cfg, r.submitterName)
-    if (leaderEmails.length === 0) {
-      return {
-        message:
-          'Chưa có người nhận duyệt: kiểm tra tab Lãnh đạo trong Cấu hình email (cần ít nhất một email).',
-        skipped: true,
-      }
-    }
-    await requestChecklistEmailNotification(resultDocToEmailPayload(r), {
-      recipientEmails: leaderEmails,
-      staffNotifyEmails,
-    })
-    return { message: 'Đã gửi lại email (Resend).' }
+    const mailOpts = await buildEmailRecipientOptions(r.submitterName)
+    await requestChecklistEmailNotification(resultDocToEmailPayload(r), mailOpts)
+    return { message: 'Đã gửi lại email.' }
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e)
     return {
@@ -776,17 +812,27 @@ export interface ApprovePageVm {
   approvedAtText: string
   totalItems: number
   failedItems: number
+  resultId?: string
+  alreadyApproved?: boolean
+  submission?: HistoryRow
 }
 
-export async function approveChecklistByToken(token: string | null | undefined): Promise<ApprovePageVm> {
-  const nowText = new Date().toLocaleString('en-GB', { timeZone: 'Asia/Ho_Chi_Minh' })
+export async function fetchSubmissionById(resultId: string): Promise<HistoryRow> {
+  await ensureFirebaseAnonymousUser()
+  const db = getDb()
+  const snap = await getDoc(doc(db, RESULTS, resultId.trim()))
+  if (!snap.exists()) throw new Error('Không tìm thấy bản ghi checklist.')
+  return mapHistoryRow(mapDoc(snap.id, snap.data() as Record<string, unknown>))
+}
+
+export async function fetchSubmissionPreviewByToken(token: string | null | undefined): Promise<ApprovePageVm> {
   const base = (msg: string, rest: Partial<ApprovePageVm> = {}): ApprovePageVm => ({
     success: false,
     message: msg,
     checklistTitle: '',
     submitterName: '',
-    approverName: 'Nguyễn Hoàng Bảo Trung',
-    approvedAtText: nowText,
+    approverName: '',
+    approvedAtText: '',
     totalItems: 0,
     failedItems: 0,
     ...rest,
@@ -794,38 +840,118 @@ export async function approveChecklistByToken(token: string | null | undefined):
 
   if (!token?.trim()) return base('Token duyệt không hợp lệ.')
 
-  const db = getDb()
-  const q = query(collection(db, RESULTS), where('approvalToken', '==', token.trim()), limit(1))
-  const snap = await getDocs(q)
-  if (snap.empty) return base('Không tìm thấy checklist cần duyệt.')
+  await ensureManagerUser()
+  const idToken = await getFirebaseAuth().currentUser?.getIdToken()
 
-  const dref = snap.docs[0].ref
-  const r = mapDoc(snap.docs[0].id, snap.docs[0].data() as Record<string, unknown>)
+  try {
+    const { requestPreviewByToken } = await import('./approveChecklist')
+    return await requestPreviewByToken(token.trim(), idToken ?? null)
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e)
+    return base(msg)
+  }
+}
 
-  if (r.isApproved) {
-    const t = r.approvedAtUtc ? r.approvedAtUtc.toLocaleString('en-GB', { timeZone: 'Asia/Ho_Chi_Minh' }) : ''
-    return {
-      success: true,
-      message: `Checklist đã được duyệt lúc ${t}.`,
-      checklistTitle: r.checklistTitle,
-      submitterName: r.submitterName,
-      approverName: 'Nguyễn Hoàng Bảo Trung',
-      approvedAtText: t,
-      totalItems: r.details.length,
-      failedItems: r.totalErrors,
+export async function confirmApproveChecklistByToken(
+  token: string | null | undefined,
+  approver?: { email?: string | null; name?: string | null; idToken?: string | null },
+): Promise<ApprovePageVm> {
+  const preview = await fetchSubmissionPreviewByToken(token)
+  if (!preview.success && !preview.alreadyApproved) return preview
+  if (preview.alreadyApproved) return preview
+
+  const trimmed = token?.trim()
+  if (!trimmed) return preview
+
+  await ensureManagerUser()
+
+  try {
+    const { requestApproveChecklist } = await import('./approveChecklist')
+    const out = await requestApproveChecklist(trimmed, {
+      email: approver?.email ?? null,
+      name: approver?.name ?? null,
+      idToken: approver?.idToken ?? null,
+    })
+    if (out.success) {
+      await writeAuditLog('approve', { resultId: out.resultId, token: trimmed, approverEmail: approver?.email })
+      return out
     }
+    return out
+  } catch (e) {
+    return { ...preview, success: false, message: e instanceof Error ? e.message : String(e) }
   }
+}
 
-  await updateDoc(dref, { isApproved: true, approvedAtUtc: serverTimestamp() })
-  const approvedAt = new Date()
-  return {
-    success: true,
-    message: `Đã duyệt checklist ${r.checklistTitle} của ${r.submitterName}.`,
-    checklistTitle: r.checklistTitle,
-    submitterName: r.submitterName,
-    approverName: 'Nguyễn Hoàng Bảo Trung',
-    approvedAtText: approvedAt.toLocaleString('en-GB', { timeZone: 'Asia/Ho_Chi_Minh' }),
-    totalItems: r.details.length,
-    failedItems: r.totalErrors,
+const AUDIT = 'auditLog'
+
+async function writeAuditLog(action: string, meta: Record<string, unknown>): Promise<void> {
+  try {
+    await ensureFirebaseUser()
+    const uid = getFirebaseAuth().currentUser?.uid ?? 'unknown'
+    const db = getDb()
+    await setDoc(doc(collection(db, AUDIT)), {
+      action,
+      meta,
+      actorUid: uid,
+      createdAtUtc: serverTimestamp(),
+    })
+  } catch {
+    /* không chặn luồng chính */
   }
+}
+
+export async function rejectChecklistById(resultId: string, reason: string): Promise<void> {
+  await ensureFirebaseUser()
+  const db = getDb()
+  const ref = doc(db, RESULTS, resultId)
+  const snap = await getDoc(ref)
+  if (!snap.exists()) throw new Error('Không tìm thấy bản ghi.')
+  const r = mapDoc(snap.id, snap.data() as Record<string, unknown>)
+  if (r.isApproved) throw new Error('Checklist đã duyệt, không thể từ chối.')
+  const user = getFirebaseAuth().currentUser
+  await updateDoc(ref, {
+    isApproved: false,
+    status: 'rejected',
+    rejectionReason: reason.trim() || 'Không đạt yêu cầu',
+    approvedAtUtc: null,
+    approvedByEmail: user?.email ?? null,
+    approvedByName: user?.displayName ?? user?.email ?? null,
+  })
+  await writeAuditLog('reject', { resultId, reason })
+}
+
+export async function sendTestChecklistEmail(): Promise<void> {
+  await ensureManagerUser()
+  const user = getFirebaseAuth().currentUser
+  const sample: ChecklistEmailNotificationPayload = {
+    checklistKey: 'test',
+    checklistTitle: '[TEST] Checklist thử nghiệm',
+    submitterName: 'Hệ thống',
+    submitterEmail: user?.email ?? 'test@example.com',
+    checkDate: new Date().toISOString().slice(0, 10),
+    totalErrors: 0,
+    createdAtUtc: new Date().toISOString(),
+    approvalToken: 'test-token-not-valid',
+    isApproved: false,
+    approvedAtUtc: null,
+    details: [
+      {
+        itemKey: 'test-1',
+        groupTitle: 'Kiểm tra',
+        label: 'Mục thử',
+        standard: 'Đạt',
+        passed: true,
+        note: null,
+      },
+    ],
+    clDocSerial: 0,
+  }
+  const mailOpts = await buildEmailRecipientOptions()
+  await requestChecklistEmailNotification(sample, mailOpts)
+  await writeAuditLog('test_email', { actor: user?.email })
+}
+
+/** @deprecated Dùng fetchSubmissionPreviewByToken + confirmApproveChecklistByToken */
+export async function approveChecklistByToken(token: string | null | undefined): Promise<ApprovePageVm> {
+  return confirmApproveChecklistByToken(token)
 }

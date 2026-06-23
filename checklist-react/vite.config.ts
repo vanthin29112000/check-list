@@ -3,6 +3,8 @@ import react from '@vitejs/plugin-react'
 
 const NOTIFY_FN = '/.netlify/functions/send-checklist-notification'
 
+const FUNCTIONS_DEV_PORT = 38889
+
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), '')
   const proxyNetlify = env.VITE_NETLIFY_DEV_PROXY === '1'
@@ -19,15 +21,18 @@ export default defineConfig(({ mode }) => {
   return {
     plugins: [react()],
     server: {
-      // Netlify Dev trên Windows hay probe 127.0.0.1 — `host: true` có thể chỉ bám IPv6 / 0.0.0.0
-      // và gây ETIMEDOUT khi kết nối localhost:5173.
-      host: '127.0.0.1',
-      port: 5173,
+      host: 'localhost',
+      port: 8888,
       strictPort: true,
       ...(proxyNetlify
         ? {
             proxy: {
-              '/.netlify/functions': { target: 'http://127.0.0.1:8888', changeOrigin: true },
+              '/.netlify/functions': {
+                target: `http://127.0.0.1:${FUNCTIONS_DEV_PORT}`,
+                changeOrigin: true,
+                timeout: 120_000,
+                proxyTimeout: 120_000,
+              },
             },
           }
         : notifyProxyTarget

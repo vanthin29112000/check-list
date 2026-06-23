@@ -67,7 +67,6 @@ export interface EmailRecipientsDocument {
   hrStaff: EmailRecipientRow[]
 }
 
-/** Gửi lên Netlify function send-checklist-notification (chỉ SMTP; server không đọc Firestore). */
 export interface ChecklistEmailNotificationPayload {
   checklistKey: string
   checklistTitle: string
@@ -95,9 +94,14 @@ export interface HistoryRow {
   isApproved: boolean
   approvedAtUtc?: string | null
   approvalLink: string
+  approvalToken?: string
   /** Số văn bản PDF 001/CL-CNTTDL… (bản ghi cũ có thể không có) */
   clDocSerial?: number
   details: HistoryDetail[]
+  status?: 'pending' | 'approved' | 'rejected'
+  rejectionReason?: string | null
+  approvedByEmail?: string | null
+  approvedByName?: string | null
 }
 
 export interface HistoryResponse {
@@ -151,6 +155,7 @@ export interface DashboardPendingApproval {
   checkDate: string
   totalErrors: number
   approvalLink: string
+  approvalToken: string
 }
 
 export interface DashboardResponse {

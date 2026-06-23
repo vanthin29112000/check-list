@@ -1,22 +1,75 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    // Chỉ user đã đăng nhập (ẩn danh) mới đọc/ghi — bật Anonymous Auth trên Firebase Console.
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function userDoc() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid));
+    }
+
+    function userRole() {
+      return signedIn() && userDoc().data.role != null ? userDoc().data.role : 'staff';
+    }
+
+    function isManager() {
+      return userRole() == 'manager' || userRole() == 'leader';
+    }
+
+    function protectedFieldsUnchanged() {
+      return request.resource.data.approvalToken == resource.data.approvalToken
+        && request.resource.data.isApproved == resource.data.isApproved
+        && request.resource.data.approvedAtUtc == resource.data.approvedAtUtc
+        && request.resource.data.approvedByEmail == resource.data.approvedByEmail
+        && request.resource.data.approvedByName == resource.data.approvedByName
+        && request.resource.data.status == resource.data.status;
+    }
+
+    match /users/{uid} {
+      allow read: if signedIn() && request.auth.uid == uid;
+      allow create: if signedIn() && request.auth.uid == uid;
+      allow update: if signedIn() && request.auth.uid == uid
+        && (!resource.data.keys().hasAny(['role']) || request.resource.data.role == resource.data.role);
+    }
+
+    function isRejectUpdate() {
+      return isManager()
+        && resource.data.isApproved == false
+        && request.resource.data.status == 'rejected'
+        && request.resource.data.approvalToken == resource.data.approvalToken
+        && request.resource.data.isApproved == false;
+    }
+
     match /checklistResults/{id} {
-      allow read: if request.auth != null;
-      allow create: if request.auth != null;
-      allow update: if request.auth != null;
+      allow read: if signedIn();
+      allow create: if signedIn()
+        && request.resource.data.isApproved == false
+        && request.resource.data.status == 'pending';
+      allow update: if signedIn() && (protectedFieldsUnchanged() || isRejectUpdate());
+      allow delete: if false;
     }
+
     match /checklistUniqueness/{id} {
-      allow read, create, delete: if request.auth != null;
+      allow read: if signedIn();
+      allow create: if signedIn();
+      allow delete: if signedIn();
     }
-    // Bộ đếm số văn bản PDF (001/CL-CNTTDL, …) — chỉ ghi qua transaction khi nộp checklist.
+
     match /checklistCounters/{id} {
-      allow read, create, update: if request.auth != null;
+      allow read: if signedIn();
+      allow create, update: if signedIn();
     }
-    // Danh sách email nhận thông báo checklist (lãnh đạo / nhân sự) — chỉnh trên tab Cấu hình email.
+
     match /appSettings/{docId} {
-      allow read, write: if request.auth != null;
+      allow read: if signedIn();
+      allow write: if signedIn() && isManager();
+    }
+
+    match /auditLog/{id} {
+      allow read: if signedIn() && isManager();
+      allow create: if signedIn();
+      allow update, delete: if false;
     }
   }
 }

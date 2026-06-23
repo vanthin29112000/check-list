@@ -4,7 +4,8 @@ import { ConfigProvider, theme } from 'antd'
 import viVN from 'antd/locale/vi_VN'
 import { BrowserRouter } from 'react-router-dom'
 import App from './App'
-import { ensureFirebaseAnonymousUser } from './lib/firebase'
+import { AuthProvider } from './auth/AuthContext'
+import { getFirebaseApp } from './lib/firebase'
 import 'antd/dist/reset.css'
 
 const root = ReactDOM.createRoot(document.getElementById('root')!)
@@ -20,21 +21,26 @@ function renderApp() {
         }}
       >
         <BrowserRouter>
-          <App />
+          <AuthProvider>
+            <App />
+          </AuthProvider>
         </BrowserRouter>
       </ConfigProvider>
     </React.StrictMode>,
   )
 }
 
-void ensureFirebaseAnonymousUser()
-  .then(() => renderApp())
-  .catch((e) => {
-    root.render(
-      <div style={{ padding: 24, fontFamily: 'sans-serif' }}>
-        <h1>Không khởi tạo được Firebase</h1>
-        <p>{String(e)}</p>
-        <p>Kiểm tra file <code>.env</code> (VITE_FIREBASE_*) và bật Anonymous Authentication trên Firebase Console.</p>
-      </div>,
-    )
-  })
+try {
+  getFirebaseApp()
+  renderApp()
+} catch (e) {
+  root.render(
+    <div style={{ padding: 24, fontFamily: 'sans-serif' }}>
+      <h1>Không khởi tạo được Firebase</h1>
+      <p>{String(e)}</p>
+      <p>
+        Kiểm tra file <code>.env</code> (VITE_FIREBASE_*) và bật Microsoft Authentication trên Firebase Console.
+      </p>
+    </div>,
+  )
+}

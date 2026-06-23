@@ -21,6 +21,7 @@ import {
 import type { ColumnsType } from 'antd/es/table'
 import dayjs, { Dayjs } from 'dayjs'
 import { useNavigate } from 'react-router-dom'
+import { useAuth } from '../auth/AuthContext'
 import { fetchCompletionStatus, fetchDefinitions, fetchEmailRecipientsConfig, submitChecklist } from '../api/client'
 import type { ChecklistDefinition, ChecklistItemDef } from '../api/types'
 
@@ -40,6 +41,7 @@ function checklistDropdownLabel(key: string, fallbackTitle: string): string {
 }
 
 export default function ChecklistFormPage() {
+  const { isManager } = useAuth()
   const navigate = useNavigate()
   const { md } = Grid.useBreakpoint()
   const isMobile = !md
@@ -475,7 +477,7 @@ export default function ChecklistFormPage() {
         placement: 'topRight',
         duration: 4,
       })
-      navigate('/dashboard')
+      navigate(isManager ? '/dashboard' : '/schedule')
     } catch (e: unknown) {
       const ax = e as { response?: { data?: { error?: string } }; message?: string }
       const msg = ax.response?.data?.error ?? ax.message ?? String(e)

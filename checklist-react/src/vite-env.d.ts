@@ -13,6 +13,8 @@ interface ImportMetaEnv {
   readonly VITE_NETLIFY_DEV_PROXY?: string
   /** Trùng NOTIFY_SHARED_SECRET trên Netlify / .env gốc nếu bật bảo vệ function gửi mail (lộ trong bundle). */
   readonly VITE_NOTIFY_SHARED_SECRET?: string
+  readonly VITE_MICROSOFT_TENANT_ID?: string
+  readonly VITE_MANAGER_EMAILS?: string
 }
 
 interface ImportMeta {
