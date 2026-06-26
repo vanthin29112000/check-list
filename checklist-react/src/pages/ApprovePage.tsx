@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
-import { Button, Card, Result, Space, Spin, Tag, Typography, message } from 'antd'
+import { Button, Card, Divider, Modal, Result, Space, Spin, Tag, Typography, message } from 'antd'
+import { CheckCircleOutlined, FilePdfOutlined } from '@ant-design/icons'
 import { useSearchParams } from 'react-router-dom'
 import {
   confirmApproveChecklistByToken,
@@ -40,7 +41,7 @@ export default function ApprovePage() {
     })()
   }, [token])
 
-  async function handleApprove() {
+  async function executeApprove() {
     if (!token || approving) return
     setApproving(true)
     try {
@@ -51,8 +52,11 @@ export default function ApprovePage() {
         idToken,
       })
       setVm(out)
-      if (out.success) message.success('Đã duyệt checklist')
-      else message.error(out.message)
+      if (out.success) {
+        message.success(out.message || 'Đã duyệt checklist')
+      } else {
+        message.error(out.message)
+      }
     } catch (e) {
       message.error(e instanceof Error ? e.message : 'Duyệt thất bại')
     } finally {
@@ -60,11 +64,34 @@ export default function ApprovePage() {
     }
   }
 
+  function handleApproveClick() {
+    if (!vm?.success || vm.alreadyApproved) return
+    Modal.confirm({
+      title: 'Xác nhận duyệt checklist',
+      content: (
+        <Space direction="vertical" size={4}>
+          <Typography.Text>
+            Bạn xác nhận duyệt checklist <strong>{vm.checklistTitle}</strong> của{' '}
+            <strong>{vm.submitterName}</strong>?
+          </Typography.Text>
+          <Typography.Text type="secondary">Hành động này không thể hoàn tác.</Typography.Text>
+          {vm.failedItems > 0 && (
+            <Typography.Text type="warning">Lưu ý: Checklist có {vm.failedItems} mục không đạt.</Typography.Text>
+          )}
+        </Space>
+      ),
+      okText: 'Xác nhận duyệt',
+      cancelText: 'Hủy',
+      okButtonProps: { danger: false, type: 'primary' },
+      onOk: () => executeApprove(),
+    })
+  }
+
   if (loading) {
     return (
       <div style={{ padding: 48, textAlign: 'center' }}>
         <Spin size="large" />
-        <Typography.Paragraph style={{ marginTop: 16 }}>Đang tải checklist…</Typography.Paragraph>
+        <Typography.Paragraph style={{ marginTop: 16 }}>Đang tải nội dung checklist…</Typography.Paragraph>
       </div>
     )
   }
@@ -74,14 +101,14 @@ export default function ApprovePage() {
   const done = vm.alreadyApproved || (vm.success && vm.approverName && vm.approvedAtText)
 
   return (
-    <div style={{ maxWidth: 960, margin: '24px auto', padding: 16 }}>
-      <Card title="Duyệt checklist" style={{ marginBottom: 16 }}>
+    <div style={{ maxWidth: 960, margin: '24px auto', padding: 16, paddingBottom: done ? 16 : 100 }}>
+      <Card title="Xem nội dung checklist" style={{ marginBottom: 16 }}>
         <Space direction="vertical" size="small" style={{ width: '100%' }}>
           <Typography.Title level={4} style={{ margin: 0 }}>
             {vm.checklistTitle}
           </Typography.Title>
           <Typography.Text>Người nộp: {vm.submitterName}</Typography.Text>
-          <Space>
+          <Space wrap>
             {vm.failedItems > 0 ? (
               <Tag color="red">{vm.failedItems} lỗi</Tag>
             ) : (
@@ -95,40 +122,79 @@ export default function ApprovePage() {
               {vm.approvedAtText ? ` — ${vm.approvedAtText}` : null}
             </Typography.Text>
           )}
+          {vm.submission && (
+            <Button
+              icon={<FilePdfOutlined />}
+              onClick={() => {
+                void (async () => {
+                  try {
+                    await downloadChecklistPdf(vm.submission!)
+                    message.success('Đã tải PDF')
+                  } catch (e) {
+                    message.error(e instanceof Error ? e.message : 'Xuất PDF thất bại')
+                  }
+                })()
+              }}
+            >
+              Tải PDF
+            </Button>
+          )}
         </Space>
       </Card>
 
-      {vm.submission ? <SubmissionDetailView row={vm.submission} /> : null}
+      {vm.submission ? (
+        <>
+          <Typography.Title level={5} style={{ marginBottom: 12 }}>
+            Chi tiết các mục đã kiểm tra
+          </Typography.Title>
+          <SubmissionDetailView row={vm.submission} />
+        </>
+      ) : null}
 
-      <Card style={{ marginTop: 16 }}>
-        {done ? (
-          <Result status="success" title="Checklist đã duyệt" subTitle={vm.message} />
-        ) : vm.success ? (
-          <Space wrap>
-            {vm.submission && (
-              <Button
-                onClick={() => {
-                  void (async () => {
-                    try {
-                      await downloadChecklistPdf(vm.submission!)
-                      message.success('Đã tải PDF')
-                    } catch (e) {
-                      message.error(e instanceof Error ? e.message : 'Xuất PDF thất bại')
-                    }
-                  })()
-                }}
-              >
-                Tải PDF
+      {done ? (
+        <Card style={{ marginTop: 16 }}>
+          <Result
+            status="success"
+            icon={<CheckCircleOutlined />}
+            title="Checklist đã duyệt"
+            subTitle={
+              vm.message.includes('email') || vm.message.includes('thông báo')
+                ? vm.message
+                : `${vm.message}${vm.message.includes('người kiểm tra') ? '' : ' Đã gửi email thông báo tới người kiểm tra.'}`
+            }
+          />
+        </Card>
+      ) : vm.success ? (
+        <div
+          style={{
+            position: 'fixed',
+            bottom: 0,
+            left: 0,
+            right: 0,
+            zIndex: 100,
+            background: '#fff',
+            borderTop: '1px solid #e2e8f0',
+            boxShadow: '0 -4px 16px rgba(15, 23, 42, 0.08)',
+            padding: '16px 24px',
+          }}
+        >
+          <div style={{ maxWidth: 960, margin: '0 auto' }}>
+            <Divider style={{ margin: '0 0 12px' }} />
+            <Space style={{ width: '100%', justifyContent: 'space-between' }} wrap>
+              <Typography.Text type="secondary">
+                Vui lòng xem kỹ nội dung checklist trước khi duyệt
+              </Typography.Text>
+              <Button type="primary" size="large" loading={approving} onClick={handleApproveClick}>
+                Duyệt checklist
               </Button>
-            )}
-            <Button type="primary" loading={approving} onClick={() => void handleApprove()}>
-              Xác nhận duyệt
-            </Button>
-          </Space>
-        ) : (
-          <Result status="error" title="Không thể duyệt" subTitle={vm.message} />
-        )}
-      </Card>
+            </Space>
+          </div>
+        </div>
+      ) : (
+        <Card style={{ marginTop: 16 }}>
+          <Result status="error" title="Không thể xem checklist" subTitle={vm.message} />
+        </Card>
+      )}
     </div>
   )
 }

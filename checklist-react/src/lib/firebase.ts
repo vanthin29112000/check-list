@@ -1,10 +1,11 @@
 import { initializeApp, type FirebaseApp } from 'firebase/app'
-import { getAuth, type Auth } from 'firebase/auth'
+import { browserLocalPersistence, getAuth, setPersistence, type Auth } from 'firebase/auth'
 import { getFirestore, type Firestore } from 'firebase/firestore'
 
 let app: FirebaseApp | undefined
 let db: Firestore | undefined
 let auth: Auth | undefined
+let persistenceReady: Promise<void> | undefined
 
 function readConfig() {
   const apiKey = import.meta.env.VITE_FIREBASE_API_KEY?.trim()
@@ -36,19 +37,24 @@ export function getDb(): Firestore {
 export function getFirebaseAuth(): Auth {
   if (!auth) {
     auth = getAuth(getFirebaseApp())
+    persistenceReady = setPersistence(auth, browserLocalPersistence).catch(() => {
+      /* trình duyệt không hỗ trợ — dùng mặc định */
+    })
   }
   return auth
 }
 
+/** Đợi persistence localStorage sẵn sàng trước khi đọc phiên. */
+export async function ensureAuthPersistence(): Promise<void> {
+  getFirebaseAuth()
+  await persistenceReady
+}
+
 /** Yêu cầu đã đăng nhập (Microsoft SSO). */
 export async function ensureFirebaseUser(): Promise<void> {
+  await ensureAuthPersistence()
   const a = getFirebaseAuth()
   if (!a.currentUser) {
     throw new Error('Bạn cần đăng nhập Microsoft để tiếp tục.')
   }
-}
-
-/** @deprecated Dùng ensureFirebaseUser sau khi bật Microsoft SSO */
-export async function ensureFirebaseAnonymousUser(): Promise<void> {
-  return ensureFirebaseUser()
 }

@@ -2,34 +2,21 @@
 import {
   Alert,
   Button,
-  Card,
-  Col,
-  Collapse,
   Grid,
-  Input,
   Modal,
-  Progress,
-  Radio,
-  Row,
-  Select,
   Space,
   Spin,
-  Table,
+  Tabs,
   Typography,
   notification,
 } from 'antd'
-import type { ColumnsType } from 'antd/es/table'
 import dayjs, { Dayjs } from 'dayjs'
 import { useNavigate } from 'react-router-dom'
 import { useAuth } from '../auth/AuthContext'
 import { fetchCompletionStatus, fetchDefinitions, fetchEmailRecipientsConfig, submitChecklist } from '../api/client'
 import type { ChecklistDefinition, ChecklistItemDef } from '../api/types'
-
-type RowData = ChecklistItemDef & { groupTitle: string }
-
-function subStateKey(itemKey: string, subKey: string): string {
-  return `${itemKey}::${subKey}`
-}
+import { ChecklistProgressBar } from '../components/checklist/ChecklistProgressBar'
+import { ChecklistSectionCard, type RowData, subStateKey } from '../components/checklist/ChecklistSectionCard'
 
 /** Nhãn hiển thị trong dropdown chọn checklist (ngắn gọn, dễ đọc). */
 function checklistDropdownLabel(key: string, fallbackTitle: string): string {
@@ -64,6 +51,7 @@ export default function ChecklistFormPage() {
   const [submitOverlayOpen, setSubmitOverlayOpen] = useState(false)
   const [submitPhaseText, setSubmitPhaseText] = useState('Đang xử lý...')
   const [notiApi, contextHolder] = notification.useNotification()
+  const [activeSectionIdx, setActiveSectionIdx] = useState('0')
   const hydratedDraftRef = useRef(false)
   const touchStartXRef = useRef<Record<string, number>>({})
 
@@ -161,6 +149,7 @@ export default function ChecklistFormPage() {
     setInvalidItemKey(null)
     setHasTriedSubmit(false)
     hydratedDraftRef.current = false
+    setActiveSectionIdx('0')
   }, [checklistKey])
 
   useEffect(() => {
@@ -522,74 +511,26 @@ export default function ChecklistFormPage() {
     })
   }
 
-  const tableColumns: ColumnsType<RowData> = [
-    {
-      title: 'Thiết bị',
-      dataIndex: 'label',
-      width: 300,
-      render: (t: string) => <Typography.Text strong>{t}</Typography.Text>,
-    },
-    {
-      title: 'Tiêu chuẩn',
-      dataIndex: 'standard',
-      width: 340,
-      render: (value: string) => <Typography.Text>{value}</Typography.Text>,
-    },
-    {
-      title: 'Kiểm tra',
-      key: 'check',
-      width: 280,
-      render: (_, r) =>
-        r.subchecks?.length ? (
-          <Space direction="vertical" size="small" style={{ width: '100%' }}>
-            {r.subchecks.map((sc) => (
-              <div key={sc.key}>
-                <Typography.Text style={{ display: 'block', marginBottom: 4 }}>{sc.label}</Typography.Text>
-                <Radio.Group
-                  size="small"
-                  value={
-                    subPassedByKey[subStateKey(r.key, sc.key)] === undefined
-                      ? undefined
-                      : subPassedByKey[subStateKey(r.key, sc.key)]
-                        ? 'pass'
-                        : 'fail'
-                  }
-                  onChange={(e) => setSubPassed(r.key, sc.key, e.target.value === 'pass')}
-                >
-                  <Radio value="pass">Đạt</Radio>
-                  <Radio value="fail">Không</Radio>
-                </Radio.Group>
-              </div>
-            ))}
-          </Space>
-        ) : (
-          <Radio.Group
-            value={passedByKey[r.key] === undefined ? undefined : passedByKey[r.key] ? 'pass' : 'fail'}
-            onChange={(e) => setPassed(r.key, e.target.value === 'pass')}
-          >
-            <Radio value="pass">Đạt</Radio>
-            <Radio value="fail">Không</Radio>
-          </Radio.Group>
-        ),
-    },
-    {
-      title: 'Ghi chú',
-      key: 'note',
-      render: (_, r) => {
-        const isFail = passedByKey[r.key] === false
-        return (
-          <Input.TextArea
-            id={`check-note-${r.key}`}
-            autoSize={{ minRows: 1, maxRows: 3 }}
-            value={noteByKey[r.key] ?? ''}
-            status={isFail && (!(noteByKey[r.key] ?? '').trim() || invalidItemKey === r.key) ? 'error' : undefined}
-            placeholder={isFail ? 'Bắt buộc ghi chú khi Không đạt' : 'Ghi chú (nếu cần)'}
-            onChange={(e) => setNote(r.key, e.target.value)}
-          />
-        )
-      },
-    },
-  ]
+  function scrollToSection(idx: number) {
+    setActiveSectionIdx(String(idx))
+    const el = document.getElementById(`section-${idx}`)
+    el?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+  }
+
+  function clearDraft() {
+    if (!checklistKey) return
+    localStorage.removeItem(draftStorageKey(checklistKey, checkDate))
+    setPassedByKey({})
+    setSubPassedByKey({})
+    setNoteByKey({})
+    setInvalidItemKey(null)
+    setHasTriedSubmit(false)
+    notiApi.success({
+      message: 'Đã xóa bản nháp',
+      description: 'Dữ liệu checklist cục bộ đã được xóa.',
+      placement: 'topRight',
+    })
+  }
 
   const canSubmitMobile = Boolean(
     active && summary.totalItems > 0 && hasAnyAvailableChecklist && summary.unansweredCount === 0,
@@ -615,24 +556,21 @@ export default function ChecklistFormPage() {
         </Typography.Text>
       </Modal>
       {contextHolder}
-      <Card title="Thông tin phiên checklist" styles={{ body: { background: '#fafafa' } }}>
-        <Row gutter={[12, 12]}>
-          <Col xs={24} md={12} lg={6}>
-            <Typography.Text strong>Checklist</Typography.Text>
-            <Select
-              style={{ width: '100%', marginTop: 8 }}
-              options={checklistOptions}
-              value={checklistKey}
-              onChange={(v) => setChecklistKey(v)}
-              placeholder="Chọn checklist"
-            />
-          </Col>
-          <Col xs={24} md={12} lg={6}>
-            <Typography.Text strong>Người kiểm tra</Typography.Text>
-            <Input style={{ marginTop: 8 }} value={submitterName} readOnly />
-          </Col>
-        </Row>
-      </Card>
+      <ChecklistProgressBar
+        checklistOptions={checklistOptions}
+        checklistKey={checklistKey}
+        onChecklistChange={setChecklistKey}
+        submitterName={submitterName}
+        activeTitle={active ? checklistDropdownLabel(active.key, active.title) : undefined}
+        summary={summary}
+        completedPercent={completedPercent}
+        hasChecklist={Boolean(active)}
+        onClearDraft={clearDraft}
+        onSubmit={openConfirmBeforeSubmit}
+        isMobile={isMobile}
+        canSubmit={canSubmitMobile}
+        busy={busy}
+      />
       {!hasAnyAvailableChecklist && (
         <Alert
           type="info"
@@ -650,230 +588,48 @@ export default function ChecklistFormPage() {
         />
       )}
 
-      {isMobile && (
-        <Card size="small" className="mobile-sticky-overview">
-          <Space direction="vertical" style={{ width: '100%' }} size={6}>
-            <Typography.Text strong>{active ? checklistDropdownLabel(active.key, active.title) : 'Chọn checklist'}</Typography.Text>
-            <Typography.Text type="secondary">
-              Bạn đã kiểm tra {summary.passedCount + summary.failedCount}/{summary.totalItems || 0} mục
-            </Typography.Text>
-            <Progress
-              percent={completedPercent}
-              strokeColor={summary.failedCount > 0 ? '#ef4444' : '#16a34a'}
-              trailColor="#e5e7eb"
-              showInfo
-            />
-            <Button
-              type="primary"
-              block
-              onClick={openConfirmBeforeSubmit}
-              disabled={!active || summary.totalItems === 0 || !hasAnyAvailableChecklist}
-            >
-              Gửi nhanh
-            </Button>
-            <div className="mobile-stats-grid">
-              <div>
-                <Typography.Text type="secondary">Tổng</Typography.Text>
-                <Typography.Title level={5} style={{ margin: 0 }}>{summary.totalItems}</Typography.Title>
-              </div>
-              <div>
-                <Typography.Text type="secondary">Đạt</Typography.Text>
-                <Typography.Title level={5} style={{ margin: 0, color: '#16a34a' }}>{summary.passedCount}</Typography.Title>
-              </div>
-              <div>
-                <Typography.Text type="secondary">Lỗi</Typography.Text>
-                <Typography.Title level={5} style={{ margin: 0, color: '#dc2626' }}>{summary.failedCount}</Typography.Title>
-              </div>
-              <div>
-                <Typography.Text type="secondary">Chưa chọn</Typography.Text>
-                <Typography.Title level={5} style={{ margin: 0, color: '#6b7280' }}>{summary.unansweredCount}</Typography.Title>
-              </div>
-            </div>
-          </Space>
-        </Card>
+
+      {active && sectionBlocks.length > 1 && (
+        <Tabs
+          activeKey={activeSectionIdx}
+          onChange={(k) => scrollToSection(Number(k))}
+          items={sectionBlocks.map((block, idx) => {
+            const s = getSectionStats(block.data)
+            const lab = block.groupTitle.trim() || 'Kiểm tra'
+            return {
+              key: String(idx),
+              label: `${block.icon} ${lab} (${s.pass + s.fail}/${block.data.length})`,
+            }
+          })}
+          style={{ marginBottom: 0 }}
+        />
       )}
 
-      <Card size="small" title="Tổng quan trước khi gửi">
-        <Space wrap size={16}>
-          <Typography.Text>Tổng mục: {summary.totalItems}</Typography.Text>
-          <Typography.Text type="success">Đạt: {summary.passedCount}</Typography.Text>
-          <Typography.Text type={summary.failedCount > 0 ? 'danger' : undefined}>Không đạt: {summary.failedCount}</Typography.Text>
-          <Typography.Text type={summary.unansweredCount > 0 ? 'secondary' : undefined}>Chưa chọn: {summary.unansweredCount}</Typography.Text>
-          <Button size="small" onClick={() => {
-            if (!checklistKey) return
-            localStorage.removeItem(draftStorageKey(checklistKey, checkDate))
-            setPassedByKey({})
-            setSubPassedByKey({})
-            setNoteByKey({})
-            setInvalidItemKey(null)
-            setHasTriedSubmit(false)
-            notiApi.success({
-              message: 'Đã xóa bản nháp',
-              description: 'Dữ liệu checklist cục bộ đã được xóa.',
-              placement: 'topRight',
-            })
-          }}>
-            Xóa bản nháp
-          </Button>
-        </Space>
-        {summary.failedCount > 0 && (
-          <Alert
-            type="warning"
-            showIcon
-            style={{ marginTop: 12 }}
-            message={`Có ${summary.failedCount} mục không đạt. Hãy kiểm tra đầy đủ ghi chú trước khi gửi.`}
-          />
-        )}
-      </Card>
-
-      {sectionBlocks.map((block, blockIdx) => {
-        const sectionLabel = block.groupTitle.trim() || 'Kiểm tra'
-        return (
-        <Card
+      {sectionBlocks.map((block, blockIdx) => (
+        <ChecklistSectionCard
           key={`${checklistKey ?? 'ck'}-${blockIdx}`}
-          title={`${block.icon} ${sectionLabel}`}
-          size="small"
-          styles={{ body: { background: '#fcfcfc' } }}
-          extra={
-            <Button size="small" onClick={() => markSectionAllPass(block.data)}>
-              Đạt tất cả
-            </Button>
-          }
-        >
-          {md ? (
-            <Table<RowData>
-              rowKey={(r) => r.key}
-              pagination={false}
-              size="middle"
-              columns={tableColumns}
-              dataSource={block.data}
-              bordered
-              rowClassName={(r) => {
-                const st = resolveItemStatus(r)
-                const isMissingStatus = hasTriedSubmit && st === undefined
-                const isFail = st === false
-                const isInvalid = invalidItemKey === r.key
-                if (isInvalid || isMissingStatus) return 'row-invalid'
-                if (isFail) return 'row-fail'
-                return ''
-              }}
-              onRow={(r) => ({ id: `check-item-${r.key}` })}
-            />
-          ) : (
-            <Collapse
-              size="small"
-              activeKey={['items']}
-              items={[
-                {
-                  key: 'items',
-                  collapsible: 'disabled',
-                  label: (() => {
-                    const s = getSectionStats(block.data)
-                    const lab = block.groupTitle.trim() || 'Kiểm tra'
-                    return `${lab} • Đạt ${s.pass} • Lỗi ${s.fail} • Chưa chọn ${s.todo}`
-                  })(),
-                  children: (
-                    <Space direction="vertical" style={{ width: '100%' }} size="small">
-                      {block.data.map((r) => {
-                        const st = resolveItemStatus(r)
-                        const isFail = st === false
-                        const isMissing = hasTriedSubmit && st === undefined
-                        return (
-                          <Card
-                            key={r.key}
-                            id={`check-item-${r.key}`}
-                            size="small"
-                            className={`mobile-item-card ${st === true ? 'is-pass' : st === false ? 'is-fail' : ''}`}
-                            style={{
-                              borderColor: invalidItemKey === r.key || isMissing ? '#ff4d4f' : isFail ? '#ff4d4f' : '#f0f0f0',
-                              background: invalidItemKey === r.key || isFail ? '#fff2f0' : st === true ? '#f0fdf4' : '#fff',
-                              borderRadius: 14,
-                            }}
-                            onTouchStart={(e) => onItemTouchStart(r.key, e.changedTouches[0]?.clientX ?? 0)}
-                            onTouchEnd={(e) => onItemTouchEnd(r.key, e.changedTouches[0]?.clientX ?? 0)}
-                          >
-                            <Space direction="vertical" style={{ width: '100%' }} size={8}>
-                              <Typography.Text strong>
-                                {st === true ? '✔ ' : st === false ? '✖ ' : ''}
-                                {r.label}
-                              </Typography.Text>
-                              <Typography.Text type="secondary">{r.standard}</Typography.Text>
-                              {r.subchecks?.length ? (
-                                <Space direction="vertical" style={{ width: '100%' }} size={6}>
-                                  <Typography.Text type="secondary">Kiểm tra từng ổ / mục:</Typography.Text>
-                                  {r.subchecks.map((sc) => (
-                                    <div key={sc.key}>
-                                      <Typography.Text style={{ display: 'block', marginBottom: 4 }}>{sc.label}</Typography.Text>
-                                      <Radio.Group
-                                        optionType="button"
-                                        buttonStyle="solid"
-                                        className="mobile-toggle-group"
-                                        style={{ display: 'flex', width: '100%' }}
-                                        value={
-                                          subPassedByKey[subStateKey(r.key, sc.key)] === undefined
-                                            ? undefined
-                                            : subPassedByKey[subStateKey(r.key, sc.key)]
-                                              ? 'pass'
-                                              : 'fail'
-                                        }
-                                        onChange={(e) => {
-                                          setSubPassed(r.key, sc.key, e.target.value === 'pass')
-                                          scrollToNextItem(r.key)
-                                        }}
-                                      >
-                                        <Radio className="mobile-pass-radio" style={{ flex: 1, textAlign: 'center' }} value="pass">
-                                          Đạt
-                                        </Radio>
-                                        <Radio className="mobile-fail-radio" style={{ flex: 1, textAlign: 'center' }} value="fail">
-                                          Không
-                                        </Radio>
-                                      </Radio.Group>
-                                    </div>
-                                  ))}
-                                </Space>
-                              ) : (
-                                <Radio.Group
-                                  optionType="button"
-                                  buttonStyle="solid"
-                                  className="mobile-toggle-group"
-                                  style={{ display: 'flex', width: '100%' }}
-                                  value={passedByKey[r.key] === undefined ? undefined : passedByKey[r.key] ? 'pass' : 'fail'}
-                                  onChange={(e) => applyItemDecision(r.key, e.target.value === 'pass')}
-                                >
-                                  <Radio className="mobile-pass-radio" style={{ flex: 1, textAlign: 'center' }} value="pass">
-                                    Đạt
-                                  </Radio>
-                                  <Radio className="mobile-fail-radio" style={{ flex: 1, textAlign: 'center' }} value="fail">
-                                    Không
-                                  </Radio>
-                                </Radio.Group>
-                              )}
-                              {isFail ? (
-                                <Input.TextArea
-                                  id={`check-note-${r.key}`}
-                                  autoSize={{ minRows: 2, maxRows: 4 }}
-                                  value={noteByKey[r.key] ?? ''}
-                                  status={(!(noteByKey[r.key] ?? '').trim() || invalidItemKey === r.key) ? 'error' : undefined}
-                                  placeholder="Nhập lỗi / vấn đề gặp phải"
-                                  onChange={(e) => setNote(r.key, e.target.value)}
-                                />
-                              ) : null}
-                              <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                                Vuốt phải để chọn Đạt · Vuốt trái để chọn Không
-                              </Typography.Text>
-                            </Space>
-                          </Card>
-                        )
-                      })}
-                    </Space>
-                  ),
-                },
-              ]}
-            />
-          )}
-        </Card>
-        )
-      })}
+          sectionId={`section-${blockIdx}`}
+          groupTitle={block.groupTitle}
+          icon={block.icon}
+          data={block.data}
+          isDesktop={Boolean(md)}
+          stats={getSectionStats(block.data)}
+          passedByKey={passedByKey}
+          subPassedByKey={subPassedByKey}
+          noteByKey={noteByKey}
+          invalidItemKey={invalidItemKey}
+          hasTriedSubmit={hasTriedSubmit}
+          resolveItemStatus={resolveItemStatus}
+          onMarkAllPass={() => markSectionAllPass(block.data)}
+          onSetPassed={setPassed}
+          onSetSubPassed={setSubPassed}
+          onSetNote={setNote}
+          onApplyItemDecision={applyItemDecision}
+          onItemTouchStart={onItemTouchStart}
+          onItemTouchEnd={onItemTouchEnd}
+          onScrollToNext={scrollToNextItem}
+        />
+      ))}
 
       {isMobile ? (
         <div className="mobile-submit-bar">
@@ -932,11 +688,7 @@ export default function ChecklistFormPage() {
           margin-bottom: 8px;
         }
         .mobile-sticky-overview {
-          position: sticky;
-          top: 8px;
-          z-index: 12;
-          border-radius: 16px;
-          box-shadow: 0 8px 24px rgba(15, 23, 42, 0.08);
+          display: none;
         }
         .mobile-stats-grid {
           display: grid;
