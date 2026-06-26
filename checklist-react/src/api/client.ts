@@ -13,6 +13,8 @@ export {
   getPublicBaseUrl,
   rejectChecklistById,
   resendChecklistEmail,
+  resetChecklistDefinitionsToDefault,
+  saveChecklistDefinitions,
   saveEmailRecipientsConfig,
   sendTestChecklistEmail,
   submitChecklist,

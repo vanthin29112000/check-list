@@ -9,9 +9,11 @@ import {
   setDoc,
   updateDoc,
 } from 'firebase/firestore'
-import { CHECKLIST_ALL, findChecklist, flattenItems } from '../catalog'
+import { CHECKLIST_ALL } from '../catalog'
+import { findChecklistWithCache, flattenItemsWithCache } from '../catalog/catalogResolver'
+import { setCatalogCache } from '../catalog/catalogStore'
 import type { ChecklistDefinition } from '../catalog/types'
-import { ensureFirebaseAnonymousUser, ensureFirebaseUser, getDb, getFirebaseAuth } from '../lib/firebase'
+import { ensureFirebaseUser, getDb, getFirebaseAuth } from '../lib/firebase'
 import { requestChecklistEmailNotification } from './notifyResend'
 import type {
   ChecklistEmailNotificationPayload,
@@ -34,6 +36,7 @@ const COUNTERS = 'checklistCounters'
 const COUNTER_CL_DOC_ID = 'clCnttDl'
 const APP_SETTINGS = 'appSettings'
 const EMAIL_RECIPIENTS_DOC = 'emailRecipients'
+const CHECKLIST_DEFINITIONS_DOC = 'checklistDefinitions'
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
 
@@ -66,7 +69,7 @@ function parseEmailRows(rows: unknown): EmailRecipientRow[] {
 }
 
 export async function fetchEmailRecipientsConfig(): Promise<EmailRecipientsDocument> {
-  await ensureFirebaseAnonymousUser()
+  await ensureFirebaseUser()
   const db = getDb()
   const snap = await getDoc(doc(db, APP_SETTINGS, EMAIL_RECIPIENTS_DOC))
   if (!snap.exists()) return defaultEmailRecipientsDoc()
@@ -78,7 +81,7 @@ export async function fetchEmailRecipientsConfig(): Promise<EmailRecipientsDocum
 }
 
 export async function saveEmailRecipientsConfig(cfg: EmailRecipientsDocument): Promise<void> {
-  await ensureFirebaseAnonymousUser()
+  await ensureFirebaseUser()
   const leaders = cfg.leaders
     .map((x) => ({ displayName: x.displayName.trim(), email: x.email.trim() }))
     .filter((x) => x.email.length > 0)
@@ -299,6 +302,20 @@ async function loadAllResults(): Promise<ResultDoc[]> {
 }
 
 export async function fetchDefinitions(): Promise<DefinitionsResponse> {
+  await ensureFirebaseUser()
+  const db = getDb()
+  const snap = await getDoc(doc(db, APP_SETTINGS, CHECKLIST_DEFINITIONS_DOC))
+  let checklists: ChecklistDefinition[]
+  if (snap.exists()) {
+    checklists = parseChecklistDefinitions(snap.data().checklists) ?? defaultDefinitionsResponse().checklists
+  } else {
+    checklists = defaultDefinitionsResponse().checklists
+  }
+  setCatalogCache(checklists)
+  return { checklists }
+}
+
+function defaultDefinitionsResponse(): DefinitionsResponse {
   return {
     checklists: CHECKLIST_ALL.map((c) => ({
       key: c.key,
@@ -317,22 +334,126 @@ export async function fetchDefinitions(): Promise<DefinitionsResponse> {
   }
 }
 
+function parseChecklistDefinitions(raw: unknown): ChecklistDefinition[] | null {
+  if (!Array.isArray(raw)) return null
+  const out: ChecklistDefinition[] = []
+  for (const c of raw) {
+    if (!c || typeof c !== 'object') continue
+    const co = c as Record<string, unknown>
+    const key = String(co.key ?? '').trim()
+    const title = String(co.title ?? '').trim()
+    if (!key || !title) continue
+    const groups: ChecklistDefinition['groups'] = []
+    if (Array.isArray(co.groups)) {
+      for (const g of co.groups) {
+        if (!g || typeof g !== 'object') continue
+        const go = g as Record<string, unknown>
+        const items: ChecklistDefinition['groups'][0]['items'] = []
+        if (Array.isArray(go.items)) {
+          for (const it of go.items) {
+            if (!it || typeof it !== 'object') continue
+            const io = it as Record<string, unknown>
+            const itemKey = String(io.key ?? '').trim()
+            const label = String(io.label ?? '').trim()
+            if (!itemKey || !label) continue
+            const subchecks =
+              Array.isArray(io.subchecks) && io.subchecks.length > 0
+                ? io.subchecks
+                    .map((sc) => {
+                      if (!sc || typeof sc !== 'object') return null
+                      const so = sc as Record<string, unknown>
+                      const sk = String(so.key ?? '').trim()
+                      const sl = String(so.label ?? '').trim()
+                      if (!sk || !sl) return null
+                      return { key: sk, label: sl }
+                    })
+                    .filter((x): x is { key: string; label: string } => x !== null)
+                : null
+            items.push({
+              key: itemKey,
+              label,
+              standard: String(io.standard ?? '').trim(),
+              type: String(io.type ?? 'pass_fail'),
+              subchecks: subchecks?.length ? subchecks : null,
+            })
+          }
+        }
+        groups.push({ title: String(go.title ?? ''), items })
+      }
+    }
+    out.push({ key, title, groups })
+  }
+  return out.length > 0 ? out : null
+}
+
+function validateChecklistDefinitions(checklists: ChecklistDefinition[]): void {
+  const keys = new Set<string>()
+  for (const c of checklists) {
+    if (!c.key.trim()) throw new Error('Checklist thiếu key.')
+    const ck = c.key.toLowerCase()
+    if (keys.has(ck)) throw new Error(`Key checklist trùng: ${c.key}`)
+    keys.add(ck)
+    const itemKeys = new Set<string>()
+    for (const g of c.groups) {
+      for (const it of g.items) {
+        if (!it.key.trim() || !it.label.trim()) {
+          throw new Error(`Mục checklist "${c.title}" thiếu key hoặc tên.`)
+        }
+        const ik = it.key.toLowerCase()
+        if (itemKeys.has(ik)) throw new Error(`Key mục trùng trong "${c.title}": ${it.key}`)
+        itemKeys.add(ik)
+      }
+    }
+  }
+}
+
+export async function saveChecklistDefinitions(checklists: ChecklistDefinition[]): Promise<void> {
+  await ensureFirebaseUser()
+  validateChecklistDefinitions(checklists)
+  const db = getDb()
+  const serialized = checklists.map((c) => ({
+    key: c.key,
+    title: c.title,
+    groups: c.groups.map((g) => ({
+      title: g.title,
+      items: g.items.map((i) => ({
+        key: i.key,
+        label: i.label,
+        standard: i.standard,
+        type: i.type || 'pass_fail',
+        subchecks: i.subchecks?.length ? i.subchecks : null,
+      })),
+    })),
+  }))
+  await setDoc(doc(db, APP_SETTINGS, CHECKLIST_DEFINITIONS_DOC), {
+    checklists: serialized,
+    updatedAtUtc: serverTimestamp(),
+  })
+  setCatalogCache(checklists)
+}
+
+export async function resetChecklistDefinitionsToDefault(): Promise<DefinitionsResponse> {
+  const defaults = defaultDefinitionsResponse()
+  await saveChecklistDefinitions(defaults.checklists)
+  return defaults
+}
+
 export async function submitChecklist(
   body: SubmitChecklistRequest,
   onProgress?: (phase: 'save' | 'email') => void,
 ): Promise<SubmitChecklistResponse> {
-  await ensureFirebaseAnonymousUser()
+  await ensureFirebaseUser()
   if (!getFirebaseAuth().currentUser) {
     throw new Error(
       'Chưa đăng nhập Firebase (ẩn danh). Vào Firebase Console → Authentication → Sign-in method → bật Anonymous; Authorized domains thêm domain site (và localhost khi dev).',
     )
   }
 
-  const def = findChecklist(body.checklistKey)
+  const def = findChecklistWithCache(body.checklistKey)
   if (!def) throw new Error(`Checklist không tồn tại: ${body.checklistKey}`)
 
   const checkDateStr = normalizeYmd(body.checkDate)
-  const expected = flattenItems(def.key)
+  const expected = flattenItemsWithCache(def.key)
   const responseKeys = new Set(body.responses.map((r) => r.itemKey.toLowerCase()))
   if (responseKeys.size !== expected.size || ![...expected.keys()].every((k) => responseKeys.has(k))) {
     throw new Error('Danh sách mục không khớp định nghĩa checklist.')
@@ -507,7 +628,7 @@ function orderDetailsForHistory(def: ChecklistDefinition | undefined, details: R
 }
 
 function mapHistoryRow(r: ResultDoc): HistoryRow {
-  const def = findChecklist(r.checklistKey)
+  const def = findChecklistWithCache(r.checklistKey)
   return {
     id: r.id,
     checklistKey: r.checklistKey,
@@ -818,7 +939,7 @@ export interface ApprovePageVm {
 }
 
 export async function fetchSubmissionById(resultId: string): Promise<HistoryRow> {
-  await ensureFirebaseAnonymousUser()
+  await ensureFirebaseUser()
   const db = getDb()
   const snap = await getDoc(doc(db, RESULTS, resultId.trim()))
   if (!snap.exists()) throw new Error('Không tìm thấy bản ghi checklist.')

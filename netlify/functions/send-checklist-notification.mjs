@@ -190,7 +190,7 @@ function buildChecklistEmailHtml(data, options) {
             <tr>
               <td align="center" bgcolor="#2563eb" style="border-radius:6px;">
                 <a href="${escapeHtml(options.approveUrl)}" target="_blank" style="display:inline-block;padding:12px 18px;font-size:14px;line-height:20px;font-weight:700;color:#ffffff;text-decoration:none;font-family:Arial,sans-serif;">
-                  Duyệt check list
+                  Xem và duyệt checklist
                 </a>
               </td>
             </tr>
@@ -494,6 +494,74 @@ function parseNotificationPayload(body) {
     details,
     clDocSerial: Number(o.clDocSerial ?? 0),
   }
+}
+
+/**
+ * Gửi email thông báo kết quả duyệt tới người đã checklist.
+ * @param {{ submitterEmail: string, submitterName: string, checklistTitle: string, approverName: string, approvedAtText: string, totalErrors: number, resultId: string, checkDate?: string }} params
+ */
+export async function sendApprovalResultEmail(params) {
+  const to = String(params.submitterEmail || '').trim()
+  if (!to) return { ok: false, error: 'Không có email người kiểm tra.' }
+
+  const mailRuntime = await resolveMailRuntime()
+  const { useSmtp, useResend, smtp, resend, publicBaseUrl } = mailRuntime
+  if (!useSmtp && !useResend) {
+    return { ok: false, error: 'Chưa cấu hình gửi mail.' }
+  }
+
+  const publicBase = publicBaseUrl || 'http://localhost:8888'
+  const detailUrl = `${publicBase.replace(/\/$/, '')}/submission/${encodeURIComponent(params.resultId)}`
+  const subject = `[ĐÃ DUYỆT] ${params.checklistTitle} — ${params.submitterName}`
+  const checkDateFmt = params.checkDate ? formatDdMmYyyy(String(params.checkDate)) : ''
+  const text = [
+    `Checklist "${params.checklistTitle}" đã được duyệt.`,
+    '',
+    `Người duyệt: ${params.approverName}`,
+    `Thời gian duyệt: ${params.approvedAtText}`,
+    checkDateFmt ? `Ngày kiểm tra: ${checkDateFmt}` : '',
+    `Tổng lỗi: ${Number(params.totalErrors ?? 0)}`,
+    '',
+    'Xem chi tiết kết quả:',
+    detailUrl,
+  ]
+    .filter(Boolean)
+    .join('\n')
+
+  const html = `
+    <div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;padding:24px;">
+      <h2 style="color:#065f46;margin:0 0 16px;">Checklist đã được duyệt</h2>
+      <p style="color:#374151;line-height:22px;">
+        Checklist <strong>${escapeHtml(params.checklistTitle)}</strong> của bạn đã được lãnh đạo duyệt thành công.
+      </p>
+      <table style="width:100%;background:#f0fdf4;border:1px solid #a7f3d0;border-radius:8px;margin:16px 0;">
+        <tr><td style="padding:14px;font-size:14px;color:#374151;">
+          <strong>Người duyệt:</strong> ${escapeHtml(params.approverName)}<br/>
+          <strong>Thời gian:</strong> ${escapeHtml(params.approvedAtText)}<br/>
+          ${checkDateFmt ? `<strong>Ngày kiểm tra:</strong> ${escapeHtml(checkDateFmt)}<br/>` : ''}
+          <strong>Tổng lỗi:</strong> ${Number(params.totalErrors ?? 0)}
+        </td></tr>
+      </table>
+      <p style="text-align:center;margin:24px 0;">
+        <a href="${escapeHtml(detailUrl)}" style="display:inline-block;padding:12px 20px;background:#16a34a;color:#fff;text-decoration:none;border-radius:6px;font-weight:700;">
+          Xem chi tiết kết quả
+        </a>
+      </p>
+    </div>
+  `
+
+  const fromHeader = useSmtp && smtp ? smtp.from : resend?.from || 'Checklist <onboarding@resend.dev>'
+
+  /** @type {import('nodemailer').Transporter | null} */
+  let transporter = null
+  if (useSmtp && smtp) {
+    transporter = createSmtpTransport(smtp)
+    await transporter.sendMail({ from: fromHeader, to, subject, text, html })
+  } else if (useResend && resend) {
+    await sendViaResend(fromHeader, to, subject, text, html, null, resend.apiKey)
+  }
+
+  return { ok: true }
 }
 
 export const handler = async (event) => {

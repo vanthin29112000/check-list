@@ -1,4 +1,5 @@
 import { corsHeaders, checkSharedSecret, findResultByToken, getAdminDb, mapResultToVm, verifyManagerIdToken, writeServerAudit } from './firebase-admin-shared.mjs'
+import { sendApprovalResultEmail } from './send-checklist-notification.mjs'
 import { FieldValue } from 'firebase-admin/firestore'
 
 export async function handler(event) {
@@ -103,20 +104,46 @@ export async function handler(event) {
     await writeServerAudit(db, 'approve', { resultId: id, token, approverEmail })
 
     const approvedAt = new Date()
+    const approvedAtText = approvedAt.toLocaleString('en-GB', { timeZone: 'Asia/Ho_Chi_Minh' })
+
+    let emailSent = false
+    const submitterEmail = String(mapped.submitterEmail || data.submitterEmail || '').trim()
+    if (submitterEmail) {
+      try {
+        const mailResult = await sendApprovalResultEmail({
+          submitterEmail,
+          submitterName: mapped.submitterName,
+          checklistTitle: mapped.checklistTitle,
+          approverName,
+          approvedAtText,
+          totalErrors: mapped.totalErrors,
+          resultId: id,
+          checkDate: mapped.checkDate,
+        })
+        emailSent = mailResult.ok === true
+      } catch (mailErr) {
+        // eslint-disable-next-line no-console
+        console.error('sendApprovalResultEmail failed', mailErr)
+      }
+    }
+
     return {
       statusCode: 200,
       headers,
       body: JSON.stringify({
         success: true,
-        message: `Đã duyệt checklist ${mapped.checklistTitle} của ${mapped.submitterName}.`,
+        message: emailSent
+          ? `Đã duyệt checklist ${mapped.checklistTitle} của ${mapped.submitterName}. Đã gửi email thông báo tới người kiểm tra.`
+          : `Đã duyệt checklist ${mapped.checklistTitle} của ${mapped.submitterName}.`,
         checklistTitle: mapped.checklistTitle,
         submitterName: mapped.submitterName,
         approverName,
-        approvedAtText: approvedAt.toLocaleString('en-GB', { timeZone: 'Asia/Ho_Chi_Minh' }),
+        approvedAtText,
         totalItems: mapped.details.length,
         failedItems: mapped.totalErrors,
         resultId: id,
         alreadyApproved: true,
+        emailSent,
       }),
     }
   } catch (e) {

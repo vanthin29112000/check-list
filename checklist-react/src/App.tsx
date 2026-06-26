@@ -8,6 +8,7 @@ import {
   LogoutOutlined,
   MenuOutlined,
   MailOutlined,
+  SettingOutlined,
 } from '@ant-design/icons'
 import { Badge, Button, Drawer, Grid, Layout, Menu, Space, Tooltip, Typography } from 'antd'
 import type { MenuProps } from 'antd'
@@ -17,6 +18,7 @@ import { useAuth } from './auth/AuthContext'
 import { RequireAuth, RequireRole } from './auth/RequireAuth'
 import { fetchCompletionStatus, fetchDashboard } from './api/client'
 import ApprovePage from './pages/ApprovePage'
+import ChecklistConfigPage from './pages/ChecklistConfigPage'
 import ChecklistFormPage from './pages/ChecklistFormPage'
 import DashboardPage from './pages/DashboardPage'
 import HistoryPage from './pages/HistoryPage'
@@ -42,11 +44,15 @@ function PublicShell({ children }: { children: ReactNode }) {
       <Header
         style={{
           flexShrink: 0,
-          background: '#0f172a',
-          paddingInline: 16,
+          background: 'linear-gradient(90deg, #0f172a 0%, #1e3a5f 100%)',
+          paddingInline: 24,
           lineHeight: '64px',
+          display: 'flex',
+          alignItems: 'center',
+          gap: 12,
         }}
       >
+        <CheckCircleOutlined style={{ color: '#60a5fa', fontSize: 22 }} />
         <Typography.Title level={5} style={{ color: '#fff', margin: 0 }}>
           Checklist vận hành
         </Typography.Title>
@@ -68,7 +74,9 @@ function AppShell({ children }: { children: ReactNode }) {
 
   const key = loc.pathname.startsWith('/submission')
     ? 'submission'
-    : loc.pathname.startsWith('/email-config')
+    : loc.pathname.startsWith('/checklist-config')
+      ? 'checklist-config'
+      : loc.pathname.startsWith('/email-config')
       ? 'email-config'
       : loc.pathname.startsWith('/history')
         ? 'history'
@@ -155,6 +163,11 @@ function AppShell({ children }: { children: ReactNode }) {
     ]
 
     if (isManager) {
+      manage.push({
+        key: 'checklist-config',
+        icon: <SettingOutlined />,
+        label: <Link to="/checklist-config">Cấu hình checklist</Link>,
+      })
       manage.push({
         key: 'email-config',
         icon: <MailOutlined />,
@@ -312,6 +325,14 @@ export default function App() {
                 <Route path="/dashboard" element={<DashboardPage />} />
                 <Route path="/history" element={<HistoryPage />} />
                 <Route path="/submission/:resultId" element={<SubmissionDetailPage />} />
+                <Route
+                  path="/checklist-config"
+                  element={
+                    <RequireRole roles={['manager', 'leader']}>
+                      <ChecklistConfigPage />
+                    </RequireRole>
+                  }
+                />
                 <Route
                   path="/email-config"
                   element={

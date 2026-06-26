@@ -11,7 +11,6 @@ import {
   OAuthProvider,
   getRedirectResult,
   onAuthStateChanged,
-  signInAnonymously,
   signInWithPopup,
   signInWithRedirect,
   signOut,
@@ -19,7 +18,7 @@ import {
 } from 'firebase/auth'
 import { doc, getDoc, serverTimestamp, setDoc } from 'firebase/firestore'
 import { fetchEmailRecipientsConfig } from '../api/checklistFirestore'
-import { getDb, getFirebaseAuth } from '../lib/firebase'
+import { ensureAuthPersistence, getDb, getFirebaseAuth } from '../lib/firebase'
 
 export type AppRole = 'staff' | 'manager' | 'leader'
 
@@ -36,10 +35,8 @@ interface AuthContextValue {
   loading: boolean
   role: AppRole
   isManager: boolean
-  allowAnonymousLogin: boolean
   authRedirectError: string | null
   signInMicrosoft: () => Promise<void>
-  signInAnonymousDev: () => Promise<void>
   logout: () => Promise<void>
 }
 
@@ -104,15 +101,6 @@ async function resolveRoleForUser(email: string, displayName: string): Promise<A
 }
 
 async function ensureUserProfile(user: User): Promise<UserProfile> {
-  if (user.isAnonymous) {
-    return {
-      uid: user.uid,
-      email: '',
-      displayName: 'Dev (ẩn danh)',
-      role: 'staff',
-    }
-  }
-
   const db = getDb()
   const ref = doc(db, 'users', user.uid)
   const snap = await getDoc(ref)
@@ -150,38 +138,45 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [loading, setLoading] = useState(true)
   const [authRedirectError, setAuthRedirectError] = useState<string | null>(null)
 
-  const allowAnonymousLogin = import.meta.env.VITE_ALLOW_ANONYMOUS_LOGIN === '1'
-
   useEffect(() => {
-    const auth = getFirebaseAuth()
-    void getRedirectResult(auth).catch((e) => {
-      setAuthRedirectError(authErrorMessage(e))
-    })
-    return onAuthStateChanged(auth, (u) => {
-      void (async () => {
-        setUser(u)
-        if (!u) {
-          setProfile(null)
-          setLoading(false)
-          return
-        }
-        try {
-          const p = await ensureUserProfile(u)
-          setProfile(p)
-        } catch {
-          setProfile(null)
-        } finally {
-          setLoading(false)
-        }
-      })()
-    })
-  }, [])
+    let unsubscribe: (() => void) | undefined
+    let cancelled = false
 
-  const signInAnonymousDev = useCallback(async () => {
-    await signInAnonymously(getFirebaseAuth())
+    void (async () => {
+      await ensureAuthPersistence()
+      if (cancelled) return
+      const auth = getFirebaseAuth()
+      void getRedirectResult(auth).catch((e) => {
+        setAuthRedirectError(authErrorMessage(e))
+      })
+      unsubscribe = onAuthStateChanged(auth, (u) => {
+        void (async () => {
+          setUser(u)
+          if (!u) {
+            setProfile(null)
+            setLoading(false)
+            return
+          }
+          try {
+            const p = await ensureUserProfile(u)
+            setProfile(p)
+          } catch {
+            setProfile(null)
+          } finally {
+            setLoading(false)
+          }
+        })()
+      })
+    })()
+
+    return () => {
+      cancelled = true
+      unsubscribe?.()
+    }
   }, [])
 
   const signInMicrosoft = useCallback(async () => {
+    await ensureAuthPersistence()
     const auth = getFirebaseAuth()
     const provider = new OAuthProvider('microsoft.com')
     const tenant = import.meta.env.VITE_MICROSOFT_TENANT_ID?.trim()
@@ -217,13 +212,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       loading,
       role,
       isManager: role === 'manager' || role === 'leader',
-      allowAnonymousLogin,
       authRedirectError,
       signInMicrosoft,
-      signInAnonymousDev,
       logout,
     }),
-    [user, profile, loading, role, allowAnonymousLogin, authRedirectError, signInMicrosoft, signInAnonymousDev, logout],
+    [user, profile, loading, role, authRedirectError, signInMicrosoft, logout],
   )
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>
